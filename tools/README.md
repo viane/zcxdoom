@@ -13,6 +13,15 @@ dependency-free package:
 - **`smoketest`** -- a `go test` that uses `rfb` directly to check that a
   zcxdoom instance actually boots and responds to input.
 
+And two tools for building without depending on Docker Hub being reachable
+(see [Building](../README.md#building-zcxdoom) in the main README for why):
+
+- **`offlinebuild`** -- what you actually run. Loads this repo's vendored
+  base images (`vendor/images/`) and drives `docker buildx build` with them.
+- **`vendorimages`** -- a maintainer-only tool that (re)creates the files in
+  `vendor/images/` in the first place. You won't need this unless you're
+  adding a new architecture or intentionally updating a base image.
+
 ## Building
 
 From the repository root, for your own machine:
@@ -86,3 +95,46 @@ retry for a few seconds before failing: x11vnc and psdoom take a moment to
 settle right after the container starts, and (discovered while building
 this) the very first input event in that window can be silently dropped.
 A test that failed on that would be flaky, not useful.
+
+## Building offline: vendored base images
+
+`vendor/images/` holds gzipped `docker save` tarballs of this project's two
+Docker Hub base images (`ubuntu:20.04`, `golang:1.17-alpine`), one per
+supported architecture (`amd64`, `arm64`, `s390x`) -- about 390MB total,
+committed as plain files (no Git LFS: LFS's free bandwidth quota is 1GB a
+*month*, which a handful of CI runs pulling ~130MB each would exhaust
+almost immediately; plain git objects have no such quota). Files over
+GitHub's 100MB single-file limit (the Go toolchain, at ~107MB compressed)
+are split into `.tar.gz.part-NNN` chunks and reassembled when loaded.
+
+**`offlinebuild`** is what you run day to day -- see
+[Building zcxdoom](../README.md#building-zcxdoom) in the main README. It
+loads the right files for `-arch` into Docker under fixed local tags
+(`zcxdoom-vendor/ubuntu-20.04:<arch>`, etc.) and passes those tags to the
+Dockerfile's `UBUNTU_IMAGE`/`GOLANG_IMAGE` build args, so the `FROM` lines
+resolve instantly from the local image store -- BuildKit never attempts a
+registry round-trip for them, so there's nothing for Docker Hub's rate
+limit to reject.
+
+**`vendorimages`** is the maintainer-only tool that produces those files.
+It pins an exact digest per (image, architecture) in its source rather than
+resolving a moving tag, so vendoring is reproducible and always matches
+what was actually tested. Run it again only when you want to:
+
+```console
+$ go run ./tools/vendorimages                    # refresh all 3 architectures
+$ go run ./tools/vendorimages -arch arm64         # just one
+```
+
+It needs `docker` and real network access to Docker Hub (there's no way
+around that for the one machine that does the initial vendoring); update
+the `digests` map in `tools/vendorimages/main.go` first if you're bumping
+to a new base image version.
+
+**What's deliberately not vendored:** the Dockerfile's `apt-get install`
+steps (compiler toolchain, SDL libraries, x11vnc, xvfb) still fetch from
+Ubuntu's own package archives over the network. That's a separate, far
+less restrictive service than Docker Hub -- it isn't the thing that was
+actually rate-limiting builds -- and vendoring its full dependency closure
+for 3 architectures would roughly double this directory's size for a
+problem that, in practice, wasn't the one being hit.

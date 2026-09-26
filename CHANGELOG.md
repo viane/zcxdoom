@@ -15,6 +15,18 @@
   `tools/vncharness` CLI) and a smoke test (`tools/smoketest`) that checks
   a running instance actually renders and responds to input, whether it's
   local, self-managed via Docker, or a remote deployment.
+* Added multi-architecture support for `arm64` and `s390x` alongside
+  `amd64` (verified end to end under QEMU emulation, including that
+  rendering is correct on the big-endian `s390x`).
+* Vendored this project's Docker Hub base images (`ubuntu:20.04`,
+  `golang:1.17-alpine`) into `vendor/images/`, one copy per architecture,
+  and added `tools/offlinebuild` to build from them directly. A build no
+  longer needs Docker Hub to be reachable at all, and so can't fail to its
+  anonymous pull rate limit; `tools/vendorimages` regenerates the vendored
+  files when a base image needs updating. The Dockerfile's `FROM` lines
+  still default to their normal Docker Hub names for plain `docker build`.
+* CI (`container.yaml`) now builds and publishes `linux/s390x` alongside
+  `amd64`/`arm64`, via the same vendored-image path as local builds.
 
 # 0.6.0
 * New image ghcr.io/storax/kubedoom:0.6.0

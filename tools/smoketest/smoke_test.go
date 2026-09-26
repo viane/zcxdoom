@@ -22,10 +22,10 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"zcxdoom/tools/internal/repopath"
 	"zcxdoom/tools/rfb"
 )
 
@@ -197,7 +197,7 @@ func startLocalContainer(t *testing.T, addr string) func() {
 	if err != nil {
 		t.Fatalf("parsing %q: %v", addr, err)
 	}
-	repoRoot, err := findRepoRoot()
+	repoRoot, err := repopath.Root()
 	if err != nil {
 		t.Fatalf("finding repo root: %v", err)
 	}
@@ -218,22 +218,5 @@ func startLocalContainer(t *testing.T, addr string) func() {
 
 	return func() {
 		exec.Command("docker", "rm", "-f", name).Run()
-	}
-}
-
-func findRepoRoot() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("no Dockerfile found above %s", dir)
-		}
-		dir = parent
 	}
 }

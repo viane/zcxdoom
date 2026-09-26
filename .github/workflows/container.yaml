@@ -7,26 +7,60 @@ on:
 
 jobs:
   build:
-    name: build
+    name: build (${{ matrix.arch }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        arch: [amd64, arm64, s390x]
     steps:
-      - uses: actions/checkout@v2
-      - uses: docker/setup-qemu-action@v1
-      - uses: docker/setup-buildx-action@v1
-      - uses: docker/login-action@v1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: version
-        run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
-      - uses: docker/build-push-action@v2
+        run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> "$GITHUB_OUTPUT"
+      # Builds from this repo's vendored base images (vendor/images/), not
+      # a live Docker Hub pull, so this step can't fail to Docker Hub's
+      # anonymous pull rate limit. See tools/README.md.
+      - name: Build ${{ matrix.arch }} image
+        run: go run ./tools/offlinebuild -arch ${{ matrix.arch }} -tag "zcxdoom:${{ matrix.arch }}"
+      - name: Push ${{ matrix.arch }} image
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}:${{ steps.version.outputs.VERSION }}-${{ matrix.arch }}"
+          docker tag "zcxdoom:${{ matrix.arch }}" "$IMAGE"
+          docker push "$IMAGE"
+
+  manifest:
+    name: publish multi-arch manifest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/login-action@v3
         with:
-          platforms: linux/amd64, linux/arm64
-          push: true
-          tags: |-
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.VERSION }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: version
+        run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> "$GITHUB_OUTPUT"
+      - name: Combine per-arch images into one manifest
+        run: |
+          BASE="ghcr.io/${{ github.repository }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          docker buildx imagetools create \
+            -t "$BASE:$VERSION" \
+            -t "$BASE:latest" \
+            "$BASE:$VERSION-amd64" \
+            "$BASE:$VERSION-arm64" \
+            "$BASE:$VERSION-s390x"
