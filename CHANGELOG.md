@@ -1,3 +1,15 @@
+# 0.7.0
+* Removed all Kubernetes integration: no more `kubectl`, pod/namespace killing,
+  `-mode` flag, or `NAMESPACE` env var. The container now runs plain classic
+  DOOM with nothing else attached.
+* Removed the `manifest/` Kubernetes deployment manifests and `kind-config.yaml`
+  (no longer applicable, there is nothing Kubernetes-specific left to deploy).
+* The DOOM IWAD is now bundled directly in the repo at `assets/doom1.wad`
+  (the free/open Freedoom WAD) instead of being downloaded from a third-party
+  mirror at build time, removing a network dependency from the build.
+* `psdoom` is now started with `-nopsmon`, so it never spawns "process monster"
+  enemies or talks to any socket.
+
 # 0.6.0
 * New image ghcr.io/storax/kubedoom:0.6.0
 * Latest image available as ghcr.io/storax/kubedoom:latest.

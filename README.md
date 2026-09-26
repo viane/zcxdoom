@@ -1,8 +1,14 @@
 # zCX DOOM
 
-The next level of chaos engineering is here! 
+Classic DOOM, running headless in a container and playable over VNC.
 
-This is a fork of the excellent
+This is a fork of [storax/kubedoom](https://github.com/storax/kubedoom) (which
+let you kill Kubernetes pods by shooting them in Doom) with all of the
+Kubernetes integration removed: no `kubectl`, no pod/namespace killing, no
+cluster RBAC. What's left is just the container plumbing to run DOOM headless
+and expose it over VNC.
+
+kubedoom itself is a fork of the excellent
 [gideonred/dockerdoomd](https://github.com/gideonred/dockerdoomd) using a
 slightly modified Doom, forked from https://github.com/gideonred/dockerdoom,
 which was forked from psdoom.
@@ -13,32 +19,21 @@ which was forked from psdoom.
 
 In order to run locally you will need to
 
-1. Run the kubedoom container
+1. Run the zcxdoom container
 2. Attach a VNC client to the appropriate port (5901)
 
 ### With Docker
 
-Run `ghcr.io/storax/kubedoom:latest` with docker locally:
-
 ```console
-$ docker run -p5901:5900 \
-  --net=host \
-  -v ~/.kube:/root/.kube \
-  --rm -it --name kubedoom \
-  ghcr.io/storax/kubedoom:latest
+$ docker run -p5901:5900 --rm -it --name zcxdoom \
+  ghcr.io/viane/zcxdoom:latest
 ```
-
-Optionally, if you set `-e NAMESPACE={your namespace}` you can limit Kubedoom to deleting pods in a single namespace
 
 ### With Podman
 
-Run `ghcr.io/storax/kubedoom:latest` with podman locally:
-
 ```console
-$ podman run -it -p5901:5900/tcp \
-  -v ~/.kube:/tmp/.kube --security-opt label=disable \
-  --env "KUBECONFIG=/tmp/.kube/config" --name kubedoom
-  ghcr.io/storax/kubedoom:latest
+$ podman run -it -p5901:5900/tcp --name zcxdoom \
+  ghcr.io/viane/zcxdoom:latest
 ```
 
 ### Attaching a VNC Client
@@ -47,79 +42,22 @@ Now start a VNC viewer and connect to `localhost:5901`. The password is `idbehol
 ```console
 $ vncviewer viewer localhost:5901
 ```
-You should now see DOOM! Now if you want to get the job done quickly enter the
-cheat `idspispopd` and walk through the wall on your right. You should be
-greeted by your pods as little pink monsters. Press `CTRL` to fire. If the
-pistol is not your thing, cheat with `idkfa` and press `5` for a nice surprise.
-Pause the game with `ESC`.
+You should now see DOOM! It starts on E1M1 at skill 1, keyboard-only (the
+mouse is disabled). Pause the game with `ESC`.
 
-### Killing namespaces
+## Building zcxdoom
 
-Kubedoom now also supports killing namespaces [in case you have too many of
-them](https://github.com/storax/kubedoom/issues/5). Simply set the `-mode` flag
-to `namespaces`:
+The repository contains a Dockerfile to build the image:
 
 ```console
-$ docker run -p5901:5900 \
-  --net=host \
-  -v ~/.kube:/root/.kube \
-  --rm -it --name kubedoom \
-  ghcr.io/storax/kubedoom:latest \
-  -mode namespaces
-```
-
-### Running Kubedoom inside Kubernetes
-
-See the example in the `/manifest` directory. You can quickly test it using
-[kind](https://github.com/kubernetes-sigs/kind). Create a cluster with the
-example config from this repository:
-
-```console
-$ kind create cluster --config kind-config.yaml
-Creating cluster "kind" ...
- ✓ Ensuring node image (kindest/node:v1.23.0) 🖼
- ✓ Preparing nodes 📦 📦
- ✓ Writing configuration 📜
- ✓ Starting control-plane 🕹️
- ✓ Installing CNI 🔌
- ✓ Installing StorageClass 💾
- ✓ Joining worker nodes 🚜
-Set kubectl context to "kind-kind"
-You can now use your cluster with:
-
-kubectl cluster-info --context kind-kind
-
-Not sure what to do next? 😅  Check out https://kind.sigs.k8s.io/docs/user/quick-start/
-```
-
-This will spin up a 2 node cluster inside docker, with port 5900 exposed from
-the worker node. Then run kubedoom inside the cluster by applying the manifest
-provided in this repository:
-
-```console
-$ kubectl apply -k manifest/
-namespace/kubedoom created
-deployment.apps/kubedoom created
-serviceaccount/kubedoom created
-clusterrolebinding.rbac.authorization.k8s.io/kubedoom created
-```
-
-To connect run:
-```console
-$ vncviewer viewer localhost:5900
-```
-
-Kubedoom requires a service account with permissions to list all pods and delete
-them and uses kubectl 1.23.2.
-
-## Building Kubedoom
-
-The repository contains a Dockerfile to build the kubedoom image. You have to
-specify your systems architecture as the `TARGETARCH` build argument. For
-example `amd64` or `arm64`.
-
-```console
-$ docker build --build-arg=TARGETARCH=amd64 -t kubedoom .
+$ docker build -t zcxdoom .
 ```
 
 To change the default VNC password, use `--build-arg=VNCPASSWORD=differentpw`.
+
+The DOOM IWAD (`assets/doom1.wad`) is bundled directly in this repository, so
+building the image needs no network access to a third-party WAD mirror. It is
+the free/open [Freedoom](https://github.com/freedoom/freedoom) `freedoom1.wad`,
+not id Software's shareware data; see `assets/doom1.wad.LICENSE.txt` for its
+license. If you'd rather ship id Software's original shareware `doom1.wad`,
+drop your own copy at that same path before building.
