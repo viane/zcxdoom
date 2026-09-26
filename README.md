@@ -61,3 +61,9 @@ the free/open [Freedoom](https://github.com/freedoom/freedoom) `freedoom1.wad`,
 not id Software's shareware data; see `assets/doom1.wad.LICENSE.txt` for its
 license. If you'd rather ship id Software's original shareware `doom1.wad`,
 drop your own copy at that same path before building.
+
+## Testing and controlling it over VNC
+
+`tools/` has a small, dependency-free Go VNC client (screenshot + key
+input) used for a smoke test and, eventually, for AI/computer-use control.
+See [`tools/README.md`](tools/README.md).

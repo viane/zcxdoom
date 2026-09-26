@@ -11,6 +11,10 @@
   enemies or talks to any socket.
 * Renamed the Go module and built binary from `kubedoom` to `zcxdoom`
   (`kubedoom.go` is now `main.go`) to drop the leftover Kubernetes branding.
+* Added `tools/`: a dependency-free Go VNC client (`tools/rfb` +
+  `tools/vncharness` CLI) and a smoke test (`tools/smoketest`) that checks
+  a running instance actually renders and responds to input, whether it's
+  local, self-managed via Docker, or a remote deployment.
 
 # 0.6.0
 * New image ghcr.io/storax/kubedoom:0.6.0
