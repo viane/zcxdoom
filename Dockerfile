@@ -1,8 +1,8 @@
-FROM golang:1.17-alpine AS build-kubedoom
-WORKDIR /go/src/kubedoom
+FROM golang:1.17-alpine AS build-zcxdoom
+WORKDIR /go/src/zcxdoom
 ADD go.mod .
-ADD kubedoom.go .
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o kubedoom .
+ADD main.go .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o zcxdoom .
 
 FROM ubuntu:20.04 AS build-doom
 ENV DEBIAN_FRONTEND=noninteractive
@@ -24,7 +24,7 @@ RUN mkdir -p \
   /build/usr/bin \
   /build/usr/local/games
 COPY assets/doom1.wad /build/root/doom1.wad
-COPY --from=build-kubedoom /go/src/kubedoom/kubedoom /build/usr/bin
+COPY --from=build-zcxdoom /go/src/zcxdoom/zcxdoom /build/usr/bin
 COPY --from=build-doom /usr/local/games/psdoom /build/usr/local/games
 
 FROM ubuntu:20.04
@@ -40,4 +40,4 @@ RUN apt-get update && apt-get install -y \
 RUN mkdir /root/.vnc && x11vnc -storepasswd "${VNCPASSWORD}" /root/.vnc/passwd
 COPY --from=build-converge /build /
 WORKDIR /root
-ENTRYPOINT ["/usr/bin/kubedoom"]
+ENTRYPOINT ["/usr/bin/zcxdoom"]

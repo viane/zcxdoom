@@ -9,6 +9,8 @@
   mirror at build time, removing a network dependency from the build.
 * `psdoom` is now started with `-nopsmon`, so it never spawns "process monster"
   enemies or talks to any socket.
+* Renamed the Go module and built binary from `kubedoom` to `zcxdoom`
+  (`kubedoom.go` is now `main.go`) to drop the leftover Kubernetes branding.
 
 # 0.6.0
 * New image ghcr.io/storax/kubedoom:0.6.0
