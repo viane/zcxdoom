@@ -47,20 +47,44 @@ mouse is disabled). Pause the game with `ESC`.
 
 ## Building zcxdoom
 
-### Offline (recommended): from this repo's vendored base images
+**All you need is Docker.** Nothing here requires Go, or any other tool, on
+your machine -- Go is only used to *produce* the files this reads, not to
+consume them.
+
+### Online: a plain docker build
+
+If Docker Hub is reachable, this is unchanged from any other project:
 
 ```console
-$ go run ./tools/offlinebuild -arch amd64 -tag zcxdoom:latest
+$ docker build -t zcxdoom .
 ```
 
-This needs no Docker Hub access at all. `ubuntu:20.04` and `golang:1.17-alpine`
-are vendored in this repository under `vendor/images/` (one copy per supported
-architecture), and this command loads them locally instead of pulling from a
-registry -- so a build can't fail to Docker Hub's anonymous pull rate limit,
-which is easy to hit from a shared IP (a CI runner, a corporate NAT) and is
-exactly what motivated vendoring them. `-arch` accepts `amd64`, `arm64`, or
-`s390x` (see [Multi-architecture](#multi-architecture) below); it defaults to
-your machine's own architecture.
+### Offline: from this repo's vendored base images
+
+`ubuntu:20.04` and `golang:1.17-alpine` are vendored in this repository under
+`vendor/images/` (one copy per supported architecture), because Docker Hub's
+anonymous pull rate limit is easy to hit from a shared IP (a CI runner, a
+corporate NAT) and will otherwise fail your build outright. To build from
+them instead of pulling:
+
+```console
+$ cat vendor/images/golang-1.17-alpine-amd64.tar.gz.part-* | docker load
+$ docker load -i vendor/images/ubuntu-20.04-amd64.tar.gz
+$ docker build \
+    --build-arg UBUNTU_IMAGE=zcxdoom-vendor/ubuntu-20.04:amd64 \
+    --build-arg GOLANG_IMAGE=zcxdoom-vendor/golang-1.17-alpine:amd64 \
+    -t zcxdoom .
+```
+
+(Swap `amd64` for `arm64` or `s390x` to match your machine -- see
+[Multi-architecture](#multi-architecture).) The first two lines just load the
+already-downloaded images into Docker's local store under fixed names instead
+of fetching them from a registry; `docker build` then picks them up by name
+like any other base image, and BuildKit never attempts a registry round-trip
+for them at all. If you'd rather not run three commands, `go run
+./tools/offlinebuild -arch amd64` does exactly this in one step and picks your
+architecture automatically -- convenient if you already have Go, but strictly
+optional.
 
 The Dockerfile's `apt-get install` steps (the compiler toolchain and the SDL/
 VNC runtime libraries) still reach out to Ubuntu's own package archives, which
@@ -68,15 +92,6 @@ is a different, much less restrictive service than Docker Hub and isn't part
 of what this vendors. A fully airgapped build with no network access at all
 would need those mirrored too; see `tools/README.md` for the size trade-off
 that decision was left out of scope on purpose.
-
-### Online: a plain docker build
-
-If Docker Hub is reachable, the Dockerfile also works completely normally on
-its own, unchanged from any other project:
-
-```console
-$ docker build -t zcxdoom .
-```
 
 Both paths accept `--build-arg VNCPASSWORD=differentpw` to change the VNC
 password from its default (`idbehold`).
@@ -94,19 +109,26 @@ drop your own copy at that same path before building.
 
 zcxdoom builds and runs correctly on `amd64`, `arm64`, and `s390x` (yes,
 really -- including on that last one, which is big-endian; the renderer has
-no endianness bugs). Cross-building for an architecture other than your
-machine's needs QEMU user-mode emulation registered (`docker run --privileged
---rm tonistiigi/binfmt --install all`; already set up for you on GitHub
-Actions by `docker/setup-qemu-action`), since Docker itself has no way to run
-another architecture's binaries otherwise:
+no endianness bugs). The published `ghcr.io/viane/zcxdoom` image is a single
+multi-arch manifest covering all three, so plain `docker run
+ghcr.io/viane/zcxdoom:latest` already gets you the right one for your
+machine automatically, and **building for your own machine's architecture
+needs nothing beyond what's already described above.**
+
+The only case that needs anything extra is *cross*-building: producing, say,
+an `s390x` image on an `amd64` machine, which requires Docker to be able to
+run another architecture's binaries via QEMU emulation. Docker Desktop (Mac
+and Windows) already includes this. On Linux, if `docker build --platform
+linux/s390x ...` fails with an "exec format error", your Docker Engine
+install needs it registered once; see
+[Docker's own multi-platform build documentation](https://docs.docker.com/build/building/multi-platform/)
+for the current recommended way to do that on your distribution -- this
+project doesn't need a specific method and doesn't require running anything
+`--privileged` itself. Once emulation is set up, `-arch` just becomes a flag:
 
 ```console
 $ go run ./tools/offlinebuild -arch s390x -tag zcxdoom:s390x
 ```
-
-The published `ghcr.io/viane/zcxdoom` image is a single multi-arch manifest
-covering all three; `docker run` picks the right one for your machine
-automatically.
 
 ## Testing and controlling it over VNC
 

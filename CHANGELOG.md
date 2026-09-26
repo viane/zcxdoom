@@ -27,6 +27,17 @@
   still default to their normal Docker Hub names for plain `docker build`.
 * CI (`container.yaml`) now builds and publishes `linux/s390x` alongside
   `amd64`/`arm64`, via the same vendored-image path as local builds.
+* Building offline needs only Docker (`docker load` the vendored files,
+  then `docker build --build-arg ...`; documented in the main README).
+  `tools/offlinebuild` remains available as an optional one-command
+  shortcut for anyone who already has Go, never a requirement.
+* Removed the `--privileged` QEMU/binfmt command from the README's main
+  flow -- it was never needed to build or run zcxdoom for your own
+  machine's architecture, only for the (rare) case of cross-building for
+  a different one, and even then Docker Desktop already includes it.
+* Replaced `assets/doom.jpg` with a current screenshot; the old one
+  predated removing Kubernetes integration and still showed pods
+  rendered as monster name tags (`kube-system`, `kube-proxy-...`).
 
 # 0.6.0
 * New image ghcr.io/storax/kubedoom:0.6.0
