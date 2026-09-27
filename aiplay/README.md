@@ -40,6 +40,15 @@ screenshot can never block or interleave with System 1's fast decisions,
 and either loop can be understood without thinking about the other's
 timing at all.
 
+Running two (or more) simultaneous VNC clients against the same instance
+is also what surfaced a real bug in `tools/rfb`: once more than one client
+is connected, x11vnc can send an unsolicited Bell or ServerCutText message
+between clients, which the RFB client wasn't skipping -- it desynced the
+whole connection instead. Found by actually running `aiplay` and a
+`vncharness record` session against the same container at once; fixed in
+`tools/rfb/rfb.go` (see its `Screenshot` doc comment) and covered by
+regression tests in `tools/rfb/rfb_test.go`.
+
 ## Why it's a separate Go module
 
 `aiplay` has its own `go.mod`, tied to the root `zcxdoom` module only
@@ -63,14 +72,17 @@ rework beyond the replace directive.
   the game's actual rendered layout (Doom draws its HUD inside a scaled,
   bordered 640x480 canvas, not at fixed offsets); it hasn't been done yet.
 - **`system1`** -- a generic HTTP client for Kev/Jev's typed
-  choice/score/bool question contract. Points at either TypeSafe's hosted
-  Jev or a self-hosted, API-compatible server (Kev, or others) via
-  `-system1-url`; nothing else changes. **Wire-format caveat:** the exact
-  request/response field names in `system1/client.go` are this project's
-  best-effort mapping onto the publicly described contract -- the real
-  server's own API docs weren't available to verify against directly.
-  Check them before depending on this against a real instance; a
-  correction stays contained to that one file.
+  choice/score/noul question contract (`state` + `questions` map in,
+  `answers` map with calibrated probabilities out). Points at either
+  TypeSafe's hosted Jev or a self-hosted, API-compatible server (Kev, or
+  others) via `-system1-url`; nothing else changes. The wire format was
+  verified directly against a running Kev server (its `/openapi.json` and
+  a live `/v1/systemone` call) rather than just documentation -- an
+  earlier version of this client, written from Kev/Jev's public
+  description alone, had the request and response shape wrong in several
+  places (arrays where the real API uses maps keyed by id, `kind`/`prompt`/
+  `choices`/`bool` instead of the real `type`/`instructions`/`criteria`/
+  `noul`) until this was actually run against a real server.
 - **`system2`** -- a client for Gemini's `generateContent` API: sends a
   screenshot plus recent history, gets back one sentence of tactical
   instruction. See **Running it** below for the free-tier notes.
@@ -109,11 +121,25 @@ checking the plumbing works before pointing it at any real backend):
 
 Kev (Apache-2.0) serves the same contract TypeSafe's own SDK expects, so
 any self-hosted, API-compatible build works here unchanged -- point
-`-system1-url` at wherever it's listening. If you don't have a GPU handy
-(this includes running it in a plain sandbox or CI), look specifically for
-an Ollama-backed Kev build at its smallest size: Ollama falls back to CPU
-automatically with no configuration, where CUDA/ROCm-oriented builds may
-not.
+`-system1-url` at wherever it's listening. Two real implementations, both
+verified against this client:
+[jaredpalmer/kev](https://github.com/jaredpalmer/kev) (Python, PyTorch
+models on CUDA/ROCm/MLX) and
+[arjun988/kev](https://github.com/arjun988/kev) ("NotJev : Kev", Node.js,
+`KEV_BACKEND=mock|ollama|openai`). The latter's `mock` backend needs no
+model or GPU at all -- `pnpm install && pnpm build && pnpm --filter
+@kev-ai/server start` gets a real, running `/v1/systemone` server in
+seconds, useful for exactly what it sounds like: proving the plumbing
+works before waiting on a model.
+
+For actual decisions instead of the mock's placeholder ones, its `ollama`
+backend (`KEV_BACKEND=ollama`, `KEV_OLLAMA_MODEL=...`) is the one to reach
+for without a GPU: Ollama falls back to CPU automatically with no
+configuration, where CUDA/ROCm-oriented builds may not. This hasn't been
+verified end-to-end in this repo's own development sandbox specifically
+because that sandbox's network policy blocks `ollama.com` outright (an
+environment-specific restriction, not anything about the code) -- it
+should work on any normal machine with internet access.
 
 ### System 2 and Gemini's free tier
 

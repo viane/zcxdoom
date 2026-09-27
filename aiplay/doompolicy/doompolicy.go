@@ -49,7 +49,16 @@ func (a Action) Keysym() string {
 
 const questionID = "next_action"
 
-var choices = []string{string(Forward), string(Back), string(TurnLeft), string(TurnRight), string(Fire), string(Use)}
+// criteria describes each option to System 1, per the "choice" question
+// type's contract (option name -> description).
+var criteria = map[string]string{
+	string(Forward):   "move forward, toward whatever is in view",
+	string(Back):      "move backward, away from whatever is in view",
+	string(TurnLeft):  "turn left in place without moving forward or back",
+	string(TurnRight): "turn right in place without moving forward or back",
+	string(Fire):      "fire the current weapon",
+	string(Use):       "open a door or activate a switch directly ahead",
+}
 
 // Decide asks System 1 what to do next given the current perceived state.
 // If s1 is nil, or the call fails or comes back without a usable answer,
@@ -59,17 +68,16 @@ var choices = []string{string(Forward), string(Back), string(TurnLeft), string(T
 // transient System-1 outage in production.
 func Decide(ctx context.Context, s1 *system1.Client, state perception.State) Action {
 	if s1 != nil {
-		answers, err := s1.Ask(ctx, state, []system1.Question{{
-			ID:      questionID,
-			Kind:    "choice",
-			Prompt:  "Given the current game state, what should the player do next?",
-			Choices: choices,
-		}})
+		answers, err := s1.Ask(ctx, state, map[string]system1.Question{
+			questionID: {
+				Type:         "choice",
+				Instructions: "Given the current game state, what should the player do next?",
+				Criteria:     criteria,
+			},
+		})
 		if err == nil {
-			for _, a := range answers {
-				if a.ID == questionID && isValidChoice(a.Choice) {
-					return Action(a.Choice)
-				}
+			if a, ok := answers[questionID]; ok && isValidChoice(a.Choice) {
+				return Action(a.Choice)
 			}
 		}
 	}
@@ -77,12 +85,8 @@ func Decide(ctx context.Context, s1 *system1.Client, state perception.State) Act
 }
 
 func isValidChoice(choice string) bool {
-	for _, c := range choices {
-		if c == choice {
-			return true
-		}
-	}
-	return false
+	_, ok := criteria[choice]
+	return ok
 }
 
 // fallback is a deliberately simple, dependency-free policy: move forward

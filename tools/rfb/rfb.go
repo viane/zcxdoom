@@ -229,6 +229,16 @@ func reverseBits(b byte) byte {
 
 // Screenshot requests a full (non-incremental) framebuffer update and
 // decodes it into an image.Image.
+//
+// A real server can send other message types unprompted at any time --
+// x11vnc in particular sends Bell and ServerCutText (clipboard sync)
+// between clients once more than one is connected (as -shared allows).
+// The read loop below skips those rather than treating them as protocol
+// errors: once a client fails to skip an unexpected message correctly,
+// every later read on that connection is misaligned with the byte stream
+// and fails in increasingly nonsensical ways -- discovered by actually
+// running two long-lived clients against a -shared server at once, which
+// is exactly the scenario this project needs to support.
 func (c *Conn) Screenshot() (image.Image, error) {
 	req := make([]byte, 10)
 	req[0] = 3 // message type: FramebufferUpdateRequest
@@ -239,18 +249,36 @@ func (c *Conn) Screenshot() (image.Image, error) {
 		return nil, fmt.Errorf("requesting framebuffer update: %w", err)
 	}
 
-	hdr, err := readN(c.r, 2)
+	for {
+		typeBuf, err := readN(c.r, 1)
+		if err != nil {
+			return nil, fmt.Errorf("reading message type: %w", err)
+		}
+		switch typeBuf[0] {
+		case 0: // FramebufferUpdate: what we asked for
+			return c.readFramebufferUpdate()
+		case 2: // Bell: no payload beyond the type byte
+			continue
+		case 3: // ServerCutText: skip its payload and keep waiting
+			if err := c.skipServerCutText(); err != nil {
+				return nil, err
+			}
+			continue
+		default:
+			// Including 1 (SetColourMapEntries), which the handshake's
+			// true-color requirement means a well-behaved server never
+			// sends us anyway.
+			return nil, fmt.Errorf("unexpected message type %d while waiting for a framebuffer update", typeBuf[0])
+		}
+	}
+}
+
+func (c *Conn) readFramebufferUpdate() (image.Image, error) {
+	hdr, err := readN(c.r, 3) // 1 padding byte + 2-byte rectangle count
 	if err != nil {
 		return nil, fmt.Errorf("reading update header: %w", err)
 	}
-	if hdr[0] != 0 {
-		return nil, fmt.Errorf("expected FramebufferUpdate (0), got message type %d", hdr[0])
-	}
-	nRectBuf, err := readN(c.r, 2)
-	if err != nil {
-		return nil, err
-	}
-	nRect := int(binary.BigEndian.Uint16(nRectBuf))
+	nRect := int(binary.BigEndian.Uint16(hdr[1:3]))
 
 	img := image.NewRGBA(image.Rect(0, 0, c.Width, c.Height))
 	bpp := int(c.pf.bpp) / 8
@@ -275,6 +303,21 @@ func (c *Conn) Screenshot() (image.Image, error) {
 		c.decodeRaw(img, x, y, w, h, data)
 	}
 	return img, nil
+}
+
+// skipServerCutText reads and discards a ServerCutText message's payload
+// (3 padding bytes, a 4-byte length, then that many bytes of text), having
+// already consumed its 1-byte message type.
+func (c *Conn) skipServerCutText() error {
+	lenBuf, err := readN(c.r, 7)
+	if err != nil {
+		return fmt.Errorf("reading ServerCutText header: %w", err)
+	}
+	length := binary.BigEndian.Uint32(lenBuf[3:7])
+	if _, err := readN(c.r, int(length)); err != nil {
+		return fmt.Errorf("reading ServerCutText payload: %w", err)
+	}
+	return nil
 }
 
 func (c *Conn) decodeRaw(img *image.RGBA, x, y, w, h int, data []byte) {

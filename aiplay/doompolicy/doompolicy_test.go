@@ -23,7 +23,7 @@ func isOneOf(a Action, options ...Action) bool {
 func TestDecideUsesSystem1AnswerWhenValid(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
-			"answers": []map[string]any{{"id": questionID, "choice": string(Fire)}},
+			"answers": map[string]any{questionID: map[string]any{"type": "choice", "choice": string(Fire)}},
 		})
 	}))
 	defer srv.Close()
@@ -45,7 +45,7 @@ func TestDecideFallsBackOnSystem1Error(t *testing.T) {
 func TestDecideFallsBackOnInvalidChoice(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
-			"answers": []map[string]any{{"id": questionID, "choice": "moonwalk"}},
+			"answers": map[string]any{questionID: map[string]any{"type": "choice", "choice": "moonwalk"}},
 		})
 	}))
 	defer srv.Close()

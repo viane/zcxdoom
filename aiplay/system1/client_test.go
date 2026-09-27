@@ -8,11 +8,10 @@ import (
 	"testing"
 )
 
-// There's no live Kev/Jev instance in CI or this sandbox, so these tests
-// stand up a fake server matching this client's assumed wire format. They
-// verify the Client <-> server round trip this code controls; they cannot
-// verify that a real Kev server actually speaks this exact format -- see
-// the wire format caveat on Client.
+// These tests stand up a fake server matching the real Kev wire format
+// (verified against a live github.com/arjun988/kev server's /openapi.json
+// and a real /v1/systemone call using its mock backend -- see client.go).
+// They verify the Client <-> server round trip this code controls.
 
 func TestAskSendsStateAndQuestionsAndParsesAnswers(t *testing.T) {
 	var gotReq wireRequest
@@ -23,26 +22,50 @@ func TestAskSendsStateAndQuestionsAndParsesAnswers(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
 			t.Fatalf("server: decode request: %v", err)
 		}
-		json.NewEncoder(w).Encode(wireResponse{Answers: []Answer{
-			{ID: "next_action", Choice: "forward", Probabilities: map[string]float64{"forward": 0.9, "fire": 0.1}},
+		json.NewEncoder(w).Encode(wireResponse{Answers: map[string]Answer{
+			"next_action": {Type: "choice", Choice: "forward", Confidence: 0.4,
+				Probabilities: map[string]float64{"forward": 0.9, "fire": 0.1}},
 		}})
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL)
 	state := map[string]any{"diff_score": 0.02}
-	questions := []Question{{ID: "next_action", Kind: "choice", Prompt: "what next?", Choices: []string{"forward", "fire"}}}
+	questions := map[string]Question{
+		"next_action": {Type: "choice", Instructions: "what next?", Criteria: map[string]string{"forward": "", "fire": ""}},
+	}
 
 	answers, err := c.Ask(context.Background(), state, questions)
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
 
-	if len(answers) != 1 || answers[0].Choice != "forward" {
-		t.Fatalf("answers = %+v, want one answer with Choice=forward", answers)
+	if a, ok := answers["next_action"]; !ok || a.Choice != "forward" {
+		t.Fatalf("answers = %+v, want next_action.Choice=forward", answers)
 	}
-	if len(gotReq.Questions) != 1 || gotReq.Questions[0].ID != "next_action" {
+	if gotReq.Model != "kev-latest" {
+		t.Errorf("request model = %q, want default kev-latest", gotReq.Model)
+	}
+	if q, ok := gotReq.Questions["next_action"]; !ok || q.Type != "choice" {
 		t.Fatalf("server saw questions = %+v, want the one we sent", gotReq.Questions)
+	}
+}
+
+func TestAskSendsBearerTokenWhenAPIKeySet(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		json.NewEncoder(w).Encode(wireResponse{Answers: map[string]Answer{}})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	c.APIKey = "secret"
+	if _, err := c.Ask(context.Background(), map[string]any{}, nil); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if gotAuth != "Bearer secret" {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer secret")
 	}
 }
 

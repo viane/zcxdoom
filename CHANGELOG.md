@@ -55,6 +55,18 @@
   at the screen and sets overall tactics. It's a separate Go module (its
   own `go.mod`, tied in via `go.work`) with no reverse dependency from the
   game -- see `aiplay/README.md`.
+* Fixed a real bug in `tools/rfb`, found by running two VNC clients against
+  the same `-shared` instance at once: `Screenshot` desynced its whole
+  connection the first time x11vnc sent an unsolicited Bell or
+  ServerCutText message between clients, instead of skipping it. Covered
+  by new regression tests in `tools/rfb/rfb_test.go`.
+* Corrected `aiplay/system1`'s wire format after actually running it
+  against real Kev servers ([jaredpalmer/kev](https://github.com/jaredpalmer/kev)
+  and [arjun988/kev](https://github.com/arjun988/kev)): the real
+  `/v1/systemone` API keys `questions`/`answers` by id (not arrays) and
+  uses `type`/`instructions`/`criteria`/`noul`, not the `kind`/`prompt`/
+  `choices`/`bool` this project's client originally guessed from Kev/Jev's
+  public description alone.
 
 # 0.6.0
 * New image ghcr.io/storax/kubedoom:0.6.0
