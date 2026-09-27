@@ -1,0 +1,21 @@
+# Override applied on top of docker-compose.yml when deploy.sh confirms
+# the host actually has a working NVIDIA GPU passthrough (Docker Desktop's
+# WSL2 GPU support, or native Linux + nvidia-container-toolkit). Adds a
+# GPU device reservation to Ollama only -- nothing else in the stack uses
+# one.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# This is the Compose-spec device-reservation syntax, which needs the
+# Compose V2 plugin (`docker compose`, bundled with modern Docker Desktop)
+# -- the legacy standalone `docker-compose` binary generally doesn't
+# support it.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

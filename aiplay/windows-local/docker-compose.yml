@@ -1,0 +1,78 @@
+# The whole aiplay stack as one Compose project: the game, a self-hosted
+# Kev (System 1), Ollama (the model Kev calls), aiplay itself, and a
+# browser-based viewer. CPU-safe by default -- see docker-compose.gpu.yml
+# for the override that gives Ollama GPU access, and deploy.sh, which
+# picks whether to apply it based on what it finds on the host.
+#
+# Run via deploy.sh, not directly: it does the GPU/VRAM checks first and
+# picks KEV_MODEL to match what was actually detected. Running this file
+# by hand works too (`docker compose up -d --build`), just skips those
+# checks and the live `ollama pull` step -- see this directory's README.
+
+services:
+  zcxdoom:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        # Pinned to amd64: Windows/WSL2 gaming PCs are the target here.
+        # Drop these two args for a plain online build on another
+        # architecture -- see ../../README.md#building-zcxdoom.
+        UBUNTU_IMAGE: zcxdoom-vendor/ubuntu-20.04:amd64
+        GOLANG_IMAGE: zcxdoom-vendor/golang-1.17-alpine:amd64
+    ports:
+      # Host-exposed on purpose, same port the main README already
+      # documents: any standalone VNC viewer (not just webvnc below)
+      # works by pointing it at localhost:5901.
+      - "5901:5900"
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+
+  kev:
+    build:
+      context: ../kev
+    environment:
+      KEV_BACKEND: ${KEV_BACKEND:-ollama}
+      KEV_OLLAMA_BASE_URL: http://ollama:11434
+      KEV_OLLAMA_MODEL: ${KEV_MODEL:-llama3.2:1b}
+    depends_on:
+      - ollama
+    ports:
+      - "3000:3000"
+
+  aiplay:
+    build:
+      context: ../..
+      dockerfile: aiplay/cmd/aiplay/Dockerfile
+    command:
+      - -addr=zcxdoom:5900
+      - -password=idbehold
+      - -system1-url=http://kev:3000
+      - -system1-interval=300ms
+    environment:
+      # Optional: set this in your shell before `deploy.sh`/`docker
+      # compose up` to also enable System 2. Empty disables it, same as
+      # running aiplay directly -- see ../README.md.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    depends_on:
+      - zcxdoom
+      - kev
+
+  webvnc:
+    build:
+      context: ../../tools/webvnc
+    environment:
+      VNC_HOST: zcxdoom
+      VNC_PORT: "5900"
+    ports:
+      - "6080:6080"
+    depends_on:
+      - zcxdoom
+
+volumes:
+  ollama-data:

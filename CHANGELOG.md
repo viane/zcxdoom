@@ -67,6 +67,33 @@
   uses `type`/`instructions`/`criteria`/`noul`, not the `kind`/`prompt`/
   `choices`/`bool` this project's client originally guessed from Kev/Jev's
   public description alone.
+* Fixed a second real bug, also found by actually deploying the stack:
+  `aiplay` connected once at startup and exited if that failed, which it
+  reliably did in a fresh Docker Compose deploy (Compose's `depends_on`
+  only waits for a container to start, not for the service inside it to
+  be ready, so `aiplay` would race the game container's own Xvfb/x11vnc
+  startup time and lose). `connectWithRetry` in `cmd/aiplay/main.go` now
+  retries the initial connection for up to `-connect-timeout` (default
+  30s) before giving up.
+* Added Dockerfiles to containerize `aiplay` itself
+  (`aiplay/cmd/aiplay/Dockerfile`) and a self-hosted Kev
+  (`aiplay/kev/Dockerfile`, building
+  [arjun988/kev](https://github.com/arjun988/kev) from a pinned commit,
+  fetched by `aiplay/kev/fetch.sh` rather than inside the Dockerfile so
+  the image build itself needs nothing beyond the Node base image).
+* Added `aiplay/windows-local/`: a Docker Compose project plus a
+  `deploy.sh` that runs the whole stack (game, Ollama, Kev, `aiplay`, and
+  the browser viewer) with one command. Checks Docker/Compose/RAM/GPU
+  first -- including that Docker can actually use a detected GPU, not
+  just that one exists -- picks an Ollama model sized to the VRAM found
+  (or a small CPU-friendly one otherwise), and pulls it live rather than
+  vendoring it. Verified end to end in this repo's own sandbox (CPU-only,
+  no GPU there) including a real failure case: pointing Kev at an
+  unpulled model correctly errors, and `aiplay` keeps playing on its
+  fallback policy rather than crashing.
+* Added a root `.dockerignore` excluding `vendor/images/` (~390MB, never
+  referenced by any Dockerfile's `COPY`/`ADD`, only loaded via `docker
+  load`) so every `docker build` in the repo sends a much smaller context.
 
 # 0.6.0
 * New image ghcr.io/storax/kubedoom:0.6.0

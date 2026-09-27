@@ -1,0 +1,10 @@
+# vendor/images/ is never referenced by a COPY/ADD in any Dockerfile --
+# it's loaded into Docker's image store via `docker load`
+# (tools/offlinebuild, tools/vendorimages), a separate mechanism from the
+# build context entirely. Excluding its ~390MB here speeds up every
+# `docker build` in this repo, since Docker otherwise sends the whole
+# context to the daemon up front regardless of what a Dockerfile actually
+# uses.
+vendor/images/
+
+.git/

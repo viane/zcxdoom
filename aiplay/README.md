@@ -116,6 +116,7 @@ checking the plumbing works before pointing it at any real backend):
 | `-system2-apikey` | `$GEMINI_API_KEY` | Gemini API key; empty disables System 2 entirely |
 | `-system2-model` | `gemini-2.5-flash` | Gemini model name |
 | `-system2-interval` | `30s` | How often System 2 re-evaluates tactics |
+| `-connect-timeout` | `30s` | How long to keep retrying the initial VNC connection before giving up |
 
 ### Self-hosting System 1 with Kev
 
@@ -135,11 +136,20 @@ works before waiting on a model.
 For actual decisions instead of the mock's placeholder ones, its `ollama`
 backend (`KEV_BACKEND=ollama`, `KEV_OLLAMA_MODEL=...`) is the one to reach
 for without a GPU: Ollama falls back to CPU automatically with no
-configuration, where CUDA/ROCm-oriented builds may not. This hasn't been
-verified end-to-end in this repo's own development sandbox specifically
-because that sandbox's network policy blocks `ollama.com` outright (an
-environment-specific restriction, not anything about the code) -- it
-should work on any normal machine with internet access.
+configuration, where CUDA/ROCm-oriented builds may not.
+
+The full stack -- game, Kev, Ollama, `aiplay`, all networked together via
+Docker Compose -- has been verified end to end this way, including a
+real failure case worth knowing about: point Kev at a model that hasn't
+been pulled yet, and it correctly reports the error, while `aiplay` just
+keeps playing on its fallback policy rather than crashing (see
+`doompolicy`, above). The one thing not verified in this repo's own
+development sandbox specifically is a live `ollama pull` actually
+completing -- that sandbox's network setup blocks it (an
+environment-specific restriction, unrelated to the code); it should work
+on any normal machine with internet access. See
+[`windows-local/`](windows-local/) for a one-command deploy of this whole
+stack, including GPU detection.
 
 ### System 2 and Gemini's free tier
 
@@ -162,15 +172,44 @@ end-to-end loop, not a fast one. Swapping in a GPU-backed System 1 (and a
 richer `perception` package alongside it) is the natural next step once
 the plumbing here is trusted.
 
+## Deploying the whole stack with one command
+
+[`windows-local/`](windows-local/) builds and runs every piece above --
+the game, Kev, Ollama, `aiplay`, and a browser-based viewer -- as one
+Docker Compose project, with checks for GPU/VRAM/Docker-GPU-passthrough
+first and a live (never vendored) model pull. Built and tested for
+Windows 11 + WSL2 + Docker Desktop with an NVIDIA GPU, but the same
+script works on native Linux + Docker too, GPU or not. See its own
+README for details.
+
+That directory also has the Dockerfiles for `kev` (`kev/Dockerfile`,
+containerizing `arjun988/kev`) and `aiplay` itself
+(`cmd/aiplay/Dockerfile`) as general-purpose pieces, usable outside the
+Windows-local setup too.
+
 ## Testing
 
 ```console
 $ go test ./...
 ```
 
-`perception`, `system1`, `system2`, and `doompolicy` all have unit tests
-(the two HTTP clients use `httptest` servers standing in for a real Kev or
-Gemini endpoint, since neither is available in CI). `cmd/aiplay` itself is
-the orchestrator and is exercised by hand against a real container instead
-of by an automated test, the same way `tools/smoketest` covers the game
-itself -- see the main `tools/README.md`.
+`perception`, `system1`, `system2`, `doompolicy`, and `cmd/aiplay` all
+have unit tests (the two HTTP clients use `httptest` servers standing in
+for a real Kev or Gemini endpoint, since neither is available in CI;
+`cmd/aiplay`'s covers the connection-retry logic below). The orchestrator
+as a whole is exercised by hand against a real container instead, the
+same way `tools/smoketest` covers the game itself -- see the main
+`tools/README.md`.
+
+## A second real bug found by actually deploying this
+
+Docker Compose's `depends_on` only waits for a container to *start*, not
+for the service inside it to be ready -- a well-known gotcha, and this
+project hit it: `aiplay` would connect once at startup and exit outright
+if that failed, which it reliably did in a fresh Compose deploy, racing
+the game container's own few seconds of Xvfb/x11vnc startup time.
+`cmd/aiplay/main.go`'s `connectWithRetry` now retries the initial
+connection (both for System 1's and System 2's connections) for up to
+`-connect-timeout` (default 30s) before giving up, which fixes this
+regardless of *why* the target isn't ready yet -- Compose ordering,
+a slow machine, or just starting `aiplay` by hand too early.

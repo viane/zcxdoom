@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"image"
 	"log"
 	"os"
@@ -36,9 +37,10 @@ func main() {
 	geminiKey := flag.String("system2-apikey", os.Getenv("GEMINI_API_KEY"), "Gemini API key for System 2 (defaults to $GEMINI_API_KEY); empty disables System 2")
 	system2Model := flag.String("system2-model", "", "Gemini model for System 2 (default gemini-2.5-flash)")
 	system2Interval := flag.Duration("system2-interval", 30*time.Second, "how often System 2 re-evaluates tactics")
+	connectTimeout := flag.Duration("connect-timeout", 30*time.Second, "how long to keep retrying the initial VNC connection before giving up (the game container may still be starting)")
 	flag.Parse()
 
-	fastConn, err := rfb.Connect(*addr, *password)
+	fastConn, err := connectWithRetry(*addr, *password, *connectTimeout)
 	if err != nil {
 		log.Fatalf("connect (system1): %v", err)
 	}
@@ -56,7 +58,7 @@ func main() {
 	tactic := "explore and fight anything you see"
 
 	if *geminiKey != "" {
-		slowConn, err := rfb.Connect(*addr, *password)
+		slowConn, err := connectWithRetry(*addr, *password, *connectTimeout)
 		if err != nil {
 			log.Fatalf("connect (system2): %v", err)
 		}
@@ -69,6 +71,37 @@ func main() {
 	}
 
 	runSystem1(fastConn, s1, *system1Interval, &tacticMu, &tactic)
+}
+
+// connectWithRetry keeps trying to connect until it succeeds or timeout
+// elapses. A single failed attempt is expected, not exceptional: in any
+// orchestrated deployment (Docker Compose, Kubernetes, or just starting
+// aiplay slightly too eagerly by hand) the game container can easily still
+// be booting -- Xvfb and x11vnc take a couple of seconds -- when aiplay's
+// own container starts. Retrying here means aiplay doesn't need Compose
+// health-check ordering or any other coordination to work correctly.
+func connectWithRetry(addr, password string, timeout time.Duration) (*rfb.Conn, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	attempt := 0
+	for {
+		attempt++
+		conn, err := rfb.Connect(addr, password)
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("connected to %s after %d attempts", addr, attempt)
+			}
+			return conn, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("giving up after %d attempts over %s: %w", attempt, timeout, lastErr)
+		}
+		if attempt == 1 {
+			log.Printf("waiting for %s to accept connections: %v", addr, err)
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func runSystem1(conn *rfb.Conn, s1 *system1.Client, interval time.Duration, tacticMu *sync.RWMutex, tactic *string) {

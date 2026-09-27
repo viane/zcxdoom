@@ -149,4 +149,7 @@ same way a human would: over VNC, with no access to the game's internals.
 A fast "System 1" loop decides the next key press many times a second,
 while a slower "System 2" call (a real multimodal LLM) periodically looks
 at the screen and sets overall tactics. See its README for the
-architecture and how to run it.
+architecture and how to run it, or
+[`aiplay/windows-local/`](aiplay/windows-local/) to deploy the whole
+stack (game + a self-hosted System 1 + `aiplay` + a browser viewer) with
+one command, GPU-accelerated if you have one.
