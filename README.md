@@ -45,6 +45,11 @@ $ vncviewer viewer localhost:5901
 You should now see DOOM! It starts on E1M1 at skill 1, keyboard-only (the
 mouse is disabled). Pause the game with `ESC`.
 
+The VNC server runs with `-shared`, so this isn't limited to one viewer at
+a time: a second VNC client, a recording, a browser-based viewer, or
+`aiplay` (see below) can all connect at once without kicking each other
+off.
+
 ## Building zcxdoom
 
 **All you need is Docker.** Nothing here requires Go, or any other tool, on
@@ -133,5 +138,15 @@ $ go run ./tools/offlinebuild -arch s390x -tag zcxdoom:s390x
 ## Testing and controlling it over VNC
 
 `tools/` has a small, dependency-free Go VNC client (screenshot + key
-input) used for a smoke test and, eventually, for AI/computer-use control.
-See [`tools/README.md`](tools/README.md).
+input, plus recording to video and a browser-based viewer) used for a
+smoke test and for driving the game by hand or from a script. See
+[`tools/README.md`](tools/README.md).
+
+## AI computer-use PoC
+
+[`aiplay/`](aiplay/README.md) is a proof of concept that plays zcxdoom the
+same way a human would: over VNC, with no access to the game's internals.
+A fast "System 1" loop decides the next key press many times a second,
+while a slower "System 2" call (a real multimodal LLM) periodically looks
+at the screen and sets overall tactics. See its README for the
+architecture and how to run it.

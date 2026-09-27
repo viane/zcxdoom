@@ -9,9 +9,20 @@ dependency-free package:
   dependencies -- copy it to a Windows, macOS, or Linux machine and it
   just runs.
 - **`vncharness`** -- a CLI on top of `rfb`, for driving a running
-  instance by hand or from a script.
+  instance by hand or from a script, and for recording what it's doing to
+  video.
 - **`smoketest`** -- a `go test` that uses `rfb` directly to check that a
   zcxdoom instance actually boots and responds to input.
+
+And **`webvnc`**, an optional sidecar for watching a running instance in a
+browser -- see [Browser-based viewing](#browser-based-viewing-webvnc)
+below.
+
+`rfb` is also what [`aiplay`](../aiplay/README.md) is built on: a
+computer-use proof of concept that plays zcxdoom over VNC the same way
+everything in this directory drives or watches it. It lives in its own Go
+module at the repository root, not in here, since it's an AI player rather
+than test/dev infrastructure -- see its own README for the details.
 
 And two tools for building without depending on Docker Hub being reachable
 (see [Building](../README.md#building-zcxdoom) in the main README for why):
@@ -62,6 +73,26 @@ sent return
 `space`, `tab`, `backspace`, `shift`, `ctrl`, `alt`, `up`, `down`, `left`,
 `right`) or any single printable character (`a`, `5`, ...), comma-separated.
 
+### Recording
+
+```console
+$ vncharness record -addr localhost:5901 -password idbehold -out game.mp4 -fps 10 -duration 30s
+wrote game.mp4 (243 frames, 24.3s, avg 10.0 fps)
+```
+
+Omit `-duration` to record until interrupted with Ctrl-C. This shells out
+to `ffmpeg` if it's on `PATH` -- the one place in `tools/` that isn't
+stdlib-only, since it's common enough not to bundle and specific enough
+not to reimplement. Without `ffmpeg`, it automatically falls back to
+writing a plain PNG sequence to the `-out` path instead (and prints the
+`ffmpeg` command to assemble it yourself later), so the command still
+fully works with nothing extra installed.
+
+Because the game's x11vnc server runs with `-shared` (see the main
+README), you can record a session while something else -- a human viewer,
+or `aiplay` -- is simultaneously connected and driving it; none of these
+clients can kick another off.
+
 ## Running the smoke test
 
 The test has two modes, chosen by one environment variable, so it works
@@ -94,7 +125,44 @@ Both the initial connection and the "does a key press register" check
 retry for a few seconds before failing: x11vnc and psdoom take a moment to
 settle right after the container starts, and (discovered while building
 this) the very first input event in that window can be silently dropped.
-A test that failed on that would be flaky, not useful.
+A test that failed on that would be flaky, not useful. (The same
+characteristic shows up in `aiplay`'s continuous decision loop, but never
+needs a retry there -- a dropped key just costs one wasted tick before the
+next one tries again automatically.)
+
+## Browser-based viewing (webvnc)
+
+`tools/webvnc` is a small, optional sidecar image -- not part of the core
+game image -- that lets you watch a running zcxdoom instance in a plain
+web browser instead of a VNC viewer app, using
+[noVNC](https://github.com/novnc/noVNC) (a VNC client that runs entirely
+as a web page) and `websockify` (the WebSocket-to-TCP bridge noVNC needs,
+since browsers can't open raw TCP sockets).
+
+```console
+$ docker build -t zcxdoom-webvnc ./tools/webvnc
+$ docker run -d --name zcxdoom-webvnc --network container:zcxdoom -p 6080:6080 zcxdoom-webvnc
+```
+
+`--network container:zcxdoom` shares the game container's network
+namespace, so `webvnc`'s default `VNC_HOST=localhost` reaches it directly
+(swap in `-e VNC_HOST=<name> -e VNC_PORT=5900` plus a shared user-defined
+network instead, if you'd rather not share the namespace). Then open
+`http://localhost:6080/vnc.html` in a browser.
+
+This is a separate image on purpose: unlike the core game image, it needs
+network access at build time (to fetch noVNC), so it's kept out of the
+offline, vendored build path entirely rather than compromise it. Building
+it needs nothing beyond a normal `docker build` with internet access; it
+was verified by driving the exact same `pip install` and noVNC-fetch steps
+by hand and then confirming a real WebSocket client receives actual RFB
+protocol bytes from a live zcxdoom container through the resulting
+websockify proxy.
+
+Like recording, this only works because of `-shared`: `webvnc` is just
+another VNC client, so it coexists fine with a human viewer, `aiplay`, or
+a `vncharness record` session all watching or driving the same instance
+at once.
 
 ## Building offline: vendored base images
 

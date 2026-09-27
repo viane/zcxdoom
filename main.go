@@ -25,7 +25,7 @@ func main() {
 	startCmd("/usr/bin/Xvfb :99 -ac -screen 0 640x480x24")
 	time.Sleep(time.Duration(2) * time.Second)
 
-	startCmd("x11vnc -geometry 640x480 -forever -usepw -display :99")
+	startCmd("x11vnc -geometry 640x480 -forever -shared -usepw -display :99")
 	log.Print("You can now connect to it with a VNC viewer at port 5900")
 
 	log.Print("Starting DOOM ...")

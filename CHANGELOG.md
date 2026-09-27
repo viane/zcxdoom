@@ -38,6 +38,23 @@
 * Replaced `assets/doom.jpg` with a current screenshot; the old one
   predated removing Kubernetes integration and still showed pods
   rendered as monster name tags (`kube-system`, `kube-proxy-...`).
+* x11vnc now runs with `-shared`, so more than one VNC client (a human
+  viewer, a recording, `aiplay`, the browser-based viewer) can connect to
+  a running instance at the same time without kicking each other off.
+* Added a `record` subcommand to `tools/vncharness`: captures a live VNC
+  session to an MP4 (via `ffmpeg`, if it's on `PATH`) or a plain PNG
+  sequence otherwise.
+* Added `tools/webvnc`, an optional sidecar image (noVNC + websockify) for
+  watching a running instance in a plain web browser. Kept separate from
+  the core game image since it needs network access at build time, unlike
+  the core image's offline, vendored build path.
+* Added `aiplay`, a computer-use proof of concept that plays zcxdoom over
+  VNC: a fast "System 1" loop (a Kev/Jev-compatible typed-decision model,
+  self-hosted or hosted) picks the next key press many times a second,
+  while a slower "System 2" call (Gemini, by default) periodically looks
+  at the screen and sets overall tactics. It's a separate Go module (its
+  own `go.mod`, tied in via `go.work`) with no reverse dependency from the
+  game -- see `aiplay/README.md`.
 
 # 0.6.0
 * New image ghcr.io/storax/kubedoom:0.6.0
