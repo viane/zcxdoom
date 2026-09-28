@@ -136,8 +136,10 @@ func runSystem1(conn *rfb.Conn, s1 *system1.Client, interval time.Duration, tact
 			framesSinceMove = state.FramesSinceMove
 			prev = curr
 
+			n++
+
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			action := doompolicy.Decide(ctx, s1, state)
+			action := doompolicy.Decide(ctx, s1, state, n)
 			cancel()
 
 			sym, err := rfb.KeysymFor(action.Keysym())
@@ -150,7 +152,6 @@ func runSystem1(conn *rfb.Conn, s1 *system1.Client, interval time.Duration, tact
 				continue
 			}
 
-			n++
 			if n%20 == 0 {
 				log.Printf("tick %d: diff=%.3f brightness=%.2f stuck=%d -> %s", n, state.DiffScore, state.MeanBrightness, state.FramesSinceMove, action)
 			}

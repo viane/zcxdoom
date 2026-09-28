@@ -49,6 +49,37 @@ func (a Action) Keysym() string {
 
 const questionID = "next_action"
 
+// ReviveInterval is how often Decide presses "use" no matter what System
+// 1 would rather do, counted in decision ticks.
+//
+// A dead player in Doom ignores every input except use: P_DeathThink
+// (dockerdoom/trunk/src/p_user.c) sets PST_REBORN only on BT_USE, and
+// key_use is space (g_game.c). Nothing else -- moving, turning, firing --
+// can end the death state, so a policy that never presses use stays dead
+// until someone restarts the container.
+//
+// This is deliberately a fixed heartbeat rather than a "have we stopped
+// moving?" check. Being dead does not reliably look like a frozen screen:
+// the damage flash fades over several tics and whatever killed you is
+// usually still moving in view, so DiffScore stays well above
+// StuckThreshold and FramesSinceMove sits at 0. Observed directly on a
+// real run -- HUD reading HEALTH 0% while the log showed diff=0.089
+// stuck=0 -- so a stasis-based detector would never have fired.
+//
+// Pressing use on a live player is harmless and mildly useful: it is the
+// open-door/activate-switch key, which the fallback policy would
+// otherwise never send at all.
+const ReviveInterval = 16
+
+// StuckReviveInterval is the faster use cadence once the screen really
+// has stopped changing (FramesSinceMove >= StuckReviveAfter), which is
+// the other way to get wedged: standing against a door that only use
+// opens. Recovering from that is worth more than one tick's chosen action.
+const StuckReviveInterval = 3
+
+// StuckReviveAfter is how many unchanged frames count as wedged.
+const StuckReviveAfter = 9
+
 // criteria describes each option to System 1, per the "choice" question
 // type's contract (option name -> description).
 var criteria = map[string]string{
@@ -66,7 +97,10 @@ var criteria = map[string]string{
 // stalling the loop -- this keeps aiplay runnable for development and
 // testing without a live Kev/Jev instance, and keeps it playing through a
 // transient System-1 outage in production.
-func Decide(ctx context.Context, s1 *system1.Client, state perception.State) Action {
+func Decide(ctx context.Context, s1 *system1.Client, state perception.State, tick int) Action {
+	if a, ok := reflex(state, tick); ok {
+		return a
+	}
 	if s1 != nil {
 		answers, err := s1.Ask(ctx, state, map[string]system1.Question{
 			questionID: {
@@ -82,6 +116,21 @@ func Decide(ctx context.Context, s1 *system1.Client, state perception.State) Act
 		}
 	}
 	return fallback(state)
+}
+
+// reflex returns the action that has to happen on this tick regardless of
+// what System 1 or the fallback would choose, and whether there is one.
+// It is the one piece of policy that cannot be delegated: see
+// ReviveInterval for why pressing use has to be guaranteed rather than
+// merely likely.
+func reflex(state perception.State, tick int) (Action, bool) {
+	if tick <= 0 {
+		return "", false
+	}
+	if state.FramesSinceMove >= StuckReviveAfter {
+		return Use, tick%StuckReviveInterval == 0
+	}
+	return Use, tick%ReviveInterval == 0
 }
 
 func isValidChoice(choice string) bool {
