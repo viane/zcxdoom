@@ -146,8 +146,11 @@ const instructions = "You are playing Doom, exploring a level. The state describ
 	"game means a monster: that is when firing is worth it. taking_damage is true when a monster is " +
 	"hurting you right now. health is 0-100 and ammo is shots left; never fire with ammo 0, and when " +
 	"health is low prefer backing away. frames_since_move counts frames where nothing changed, so " +
-	"above a few you are stuck against a wall and should turn. When nothing is moving and you are not " +
-	"being hurt, keep exploring by moving forward. What should the player do next?"
+	"above a few you are stuck against a wall and should turn. wall_directly_ahead is true when " +
+	"pressing forward has stopped getting you anywhere because something is in the way: moving " +
+	"forward again will not help, so turn or back away instead. When ammo is missing entirely you " +
+	"are holding a melee weapon, which needs none. When nothing is moving and you are not being " +
+	"hurt, keep exploring by moving forward. What should the player do next?"
 
 // criteria describes each option to System 1, per the "choice" question
 // type's contract (option name -> description).

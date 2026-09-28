@@ -61,6 +61,47 @@ type State struct {
 	// hurting the player right now. Exact, since it comes from the HUD
 	// reading rather than from the picture.
 	TakingDamage bool `json:"taking_damage"`
+
+	// True when pressing forward has stopped getting the player
+	// anywhere -- see ForwardBlocked. nil until enough forward presses
+	// have been seen to judge.
+	WallAhead *bool `json:"wall_directly_ahead,omitempty"`
+}
+
+// ForwardProgress is how much of the view a step forward is expected to
+// change when the way is actually clear.
+//
+// Measured by walking a live game into a wall: while the way was clear,
+// consecutive frames differed by 0.26 to 0.53; once against the wall,
+// by 0.007 to 0.024. The gap between those is enormous, so this sits
+// well inside it.
+//
+// Note how badly FramesSinceMove handles this case, which is why it
+// needs its own signal: 0.007 to 0.024 straddles StuckThreshold, so
+// pressed against a wall the stuck counter climbs and resets and never
+// gets anywhere. The player is not still -- Doom slides them along the
+// wall, so the view keeps changing -- they are just not getting
+// anywhere, and those are different things.
+const ForwardProgress = 0.05
+
+// ForwardSamples is how many recent forward presses ForwardBlocked
+// judges over. More than one because a single step can legitimately
+// change little (facing a blank wall across a room), and too many would
+// be slow to notice.
+const ForwardSamples = 4
+
+// ForwardBlocked reports whether the last few forward presses moved the
+// view enough to count as progress. diffs are the DiffScores observed
+// after each of those presses, most recent last.
+func ForwardBlocked(diffs []float64) (blocked, known bool) {
+	if len(diffs) < ForwardSamples {
+		return false, false
+	}
+	var sum float64
+	for _, d := range diffs[len(diffs)-ForwardSamples:] {
+		sum += d
+	}
+	return sum/ForwardSamples < ForwardProgress, true
 }
 
 // Thresholds for MotionSeen, measured against a live game with the
@@ -142,7 +183,8 @@ func Extract(prev, curr image.Image, framesSinceMove int, tactic string) State {
 	}
 
 	if hud, ok := ReadHUD(curr); ok {
-		s.Health, s.Ammo, s.Armor = &hud.Health, &hud.Ammo, &hud.Armor
+		s.Health, s.Armor = &hud.Health, &hud.Armor
+		s.Ammo = hud.Ammo // nil for a weapon that uses no ammunition
 	}
 	return s
 }

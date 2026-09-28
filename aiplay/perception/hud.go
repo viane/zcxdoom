@@ -58,49 +58,72 @@ const (
 // reads as unknown rather than as the wrong number.
 const maxGlyphMismatch = 45
 
-// HUD is what the status bar says, read off the rendered frame.
+// HUD is what the status bar says, read off the rendered frame. Ammo is
+// nil when the bar shows no ammo count at all, which is a real state
+// rather than a failure: the fist and the chainsaw use no ammunition, and
+// STlib_drawNum simply draws nothing for them (it is handed the sentinel
+// 1994 and returns early).
 type HUD struct {
 	Health int
-	Ammo   int
+	Ammo   *int
 	Armor  int
 }
 
-// ReadHUD reads the three status-bar numbers. ok is false if any of them
-// could not be read with confidence -- a partially drawn frame, or the
-// status bar obscured -- in which case callers should report nothing
-// rather than guess, since a wrong health reading is worse than none.
+// ReadHUD reads the status bar. ok is false when it could not be read
+// with confidence -- a partially drawn frame, or the bar obscured -- in
+// which case callers should report nothing rather than guess, since a
+// wrong health reading is worse than none.
 func ReadHUD(img image.Image) (hud HUD, ok bool) {
-	health, okH := readNumber(img, healthRightX)
-	ammo, okA := readNumber(img, ammoRightX)
-	armor, okR := readNumber(img, armorRightX)
-	if !okH || !okA || !okR {
+	// Health and armor are always drawn, so a blank one means we are not
+	// looking at an intact status bar and nothing here can be trusted.
+	health, hs := readNumber(img, healthRightX)
+	armor, rs := readNumber(img, armorRightX)
+	if hs != numberOK || rs != numberOK {
 		return HUD{}, false
 	}
-	return HUD{Health: health, Ammo: ammo, Armor: armor}, true
+	hud = HUD{Health: health, Armor: armor}
+
+	switch ammo, as := readNumber(img, ammoRightX); as {
+	case numberOK:
+		hud.Ammo = &ammo
+	case numberBlank:
+		// Melee weapon in hand: no count to read, and that is fine.
+	default:
+		return HUD{}, false
+	}
+	return hud, true
 }
+
+type numberState int
+
+const (
+	numberOK numberState = iota
+	numberBlank
+	numberBad
+)
 
 // readNumber reads one right-aligned field whose rightmost edge is at
 // rightX in game coordinates.
-func readNumber(img image.Image, rightX int) (int, bool) {
+func readNumber(img image.Image, rightX int) (int, numberState) {
 	value, place := 0, 1
 	for i := 0; i < numberDigits; i++ {
 		digit, state := readDigit(img, rightX-(i+1)*glyphW)
 		switch state {
 		case cellBlank:
-			// Leading zeros are never drawn, so the first blank ends
-			// the number -- unless nothing at all was drawn, which is
-			// not a state the game produces and means we misread.
+			// Leading zeros are never drawn, so the first blank ends the
+			// number. A blank in the rightmost cell means the field was
+			// not drawn at all.
 			if i == 0 {
-				return 0, false
+				return 0, numberBlank
 			}
-			return value, true
+			return value, numberOK
 		case cellUnknown:
-			return 0, false
+			return 0, numberBad
 		}
 		value += digit * place
 		place *= 10
 	}
-	return value, true
+	return value, numberOK
 }
 
 type cellState int

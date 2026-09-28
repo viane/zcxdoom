@@ -42,6 +42,7 @@ func main() {
 	password := flag.String("password", "idbehold", "")
 	n := flag.Int("n", 20, "")
 	gap := flag.Duration("gap", 300*time.Millisecond, "")
+	press := flag.String("press", "", "tap this key before each sample, to measure while driving (e.g. -press up to walk into a wall)")
 	flag.Parse()
 
 	conn, err := rfb.Connect(*addr, *password)
@@ -51,6 +52,15 @@ func main() {
 	defer conn.Close()
 
 	for i := 0; i < *n; i++ {
+		if *press != "" {
+			sym, err := rfb.KeysymFor(*press)
+			if err != nil {
+				panic(err)
+			}
+			if err := conn.Tap(sym); err != nil {
+				panic(err)
+			}
+		}
 		a, err := conn.Screenshot()
 		if err != nil {
 			panic(err)

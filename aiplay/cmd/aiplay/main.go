@@ -160,6 +160,7 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 	// doompolicy.IsProbeTick), and lastHealth so a drop can be spotted.
 	var prevAction, prevPrevAction doompolicy.Action
 	var motionInView *bool
+	var forwardDiffs []float64
 	lastHealth := -1
 
 	for {
@@ -197,6 +198,19 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 			// ordinary tick.
 			state.MotionInView = motionInView
 
+			// How far the last few forward presses actually got us. Kept
+			// here rather than in perception because only the loop knows
+			// which action produced which frame.
+			if prevAction == doompolicy.Forward {
+				forwardDiffs = append(forwardDiffs, state.DiffScore)
+				if len(forwardDiffs) > perception.ForwardSamples {
+					forwardDiffs = forwardDiffs[1:]
+				}
+			}
+			if blocked, known := perception.ForwardBlocked(forwardDiffs); known {
+				state.WallAhead = &blocked
+			}
+
 			if state.Health != nil {
 				if lastHealth >= 0 && *state.Health < lastHealth {
 					state.TakingDamage = true
@@ -221,12 +235,24 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 					continue
 				}
 			}
+			// Turning or backing off changes what is in front of the
+			// player, so everything measured about the old direction is
+			// now about somewhere else. Without this the verdict sticks:
+			// it only refreshes on a forward press, and once "blocked"
+			// makes the model turn instead of going forward, nothing
+			// ever updates it and the player turns on the spot forever.
+			switch action {
+			case doompolicy.TurnLeft, doompolicy.TurnRight, doompolicy.Back:
+				forwardDiffs = forwardDiffs[:0]
+			}
+
 			prevPrevAction, prevAction = prevAction, action
 
 			if n%20 == 0 {
-				log.Printf("tick %d: diff=%.3f brightness=%.2f stuck=%d health=%s moving=%s hurt=%v -> %s",
-					n, state.DiffScore, state.MeanBrightness, state.FramesSinceMove,
-					intOrUnknown(state.Health), boolOrUnknown(state.MotionInView), state.TakingDamage, action)
+				log.Printf("tick %d: diff=%.3f stuck=%d health=%s moving=%s hurt=%v wall=%s -> %s",
+					n, state.DiffScore, state.FramesSinceMove,
+					intOrUnknown(state.Health), boolOrUnknown(state.MotionInView),
+					state.TakingDamage, boolOrUnknown(state.WallAhead), action)
 			}
 		}
 	}

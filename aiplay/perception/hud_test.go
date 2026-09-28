@@ -41,9 +41,13 @@ func TestReadHUDOnRealFrames(t *testing.T) {
 			t.Errorf("%s: ReadHUD reported failure, want a reading", tc.file)
 			continue
 		}
-		if hud.Health != tc.health || hud.Ammo != tc.ammo || hud.Armor != tc.armor {
+		if hud.Ammo == nil {
+			t.Errorf("%s: ammo = nil, want %d", tc.file, tc.ammo)
+			continue
+		}
+		if hud.Health != tc.health || *hud.Ammo != tc.ammo || hud.Armor != tc.armor {
 			t.Errorf("%s: got health=%d ammo=%d armor=%d, want health=%d ammo=%d armor=%d",
-				tc.file, hud.Health, hud.Ammo, hud.Armor, tc.health, tc.ammo, tc.armor)
+				tc.file, hud.Health, *hud.Ammo, hud.Armor, tc.health, tc.ammo, tc.armor)
 		}
 	}
 }
@@ -135,5 +139,84 @@ func TestExtractReportsBrightnessDelta(t *testing.T) {
 	}
 	if d := Extract(bright, bright, 0, "").BrightnessDelta; d != 0 {
 		t.Errorf("BrightnessDelta between a frame and itself = %v, want 0", d)
+	}
+}
+
+// With the fist or chainsaw in hand there is no ammo count on the bar at
+// all -- STlib_drawNum is handed the sentinel 1994 and draws nothing. An
+// earlier version treated that empty field as a misread and threw away
+// the whole status bar with it, which meant health went unknown for as
+// long as a melee weapon was selected. Health is the most useful thing
+// on the bar, so losing it to a blank field next to it is the wrong
+// trade. This frame is a real capture of that state.
+func TestReadHUDWithNoAmmoCounter(t *testing.T) {
+	hud, ok := ReadHUD(loadFrame(t, "hud_melee_no_ammo.png"))
+	if !ok {
+		t.Fatal("ReadHUD reported failure on a frame with no ammo counter, want a reading")
+	}
+	if hud.Ammo != nil {
+		t.Errorf("ammo = %d, want nil (no counter is drawn)", *hud.Ammo)
+	}
+	if hud.Health != 20 {
+		t.Errorf("health = %d, want 20", hud.Health)
+	}
+	if hud.Armor != 0 {
+		t.Errorf("armor = %d, want 0", hud.Armor)
+	}
+}
+
+// The numbers are measured: a live game was walked into a wall while
+// recording how much each forward press changed the view.
+func TestForwardBlockedUsesMeasuredProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		diffs          []float64
+		blocked, known bool
+	}{
+		{"not enough presses yet", []float64{0.01, 0.01}, false, false},
+		{"walking a clear corridor", []float64{0.53469, 0.39208, 0.36464, 0.31531}, false, true},
+		{"pressed against a wall", []float64{0.00688, 0.01042, 0.01078, 0.00927}, true, true},
+		{"sliding along a wall", []float64{0.01042, 0.02396, 0.01375, 0.01078}, true, true},
+		{"just hit the wall, older presses cleared", []float64{0.31531, 0.26042, 0.00688, 0.01042}, false, true},
+	} {
+		blocked, known := ForwardBlocked(tc.diffs)
+		if blocked != tc.blocked || known != tc.known {
+			t.Errorf("%s: ForwardBlocked(%v) = (%v, %v), want (%v, %v)",
+				tc.name, tc.diffs, blocked, known, tc.blocked, tc.known)
+		}
+	}
+}
+
+// Being pressed against a wall is exactly the case FramesSinceMove
+// cannot see, which is the reason for a separate signal: Doom slides the
+// player along the wall, so the view keeps changing just enough to reset
+// the stuck counter.
+func TestWallDiffsStraddleTheStuckThreshold(t *testing.T) {
+	againstWall := []float64{0.00688, 0.01042, 0.01078, 0.00927, 0.02396, 0.01375}
+	below, above := 0, 0
+	for _, d := range againstWall {
+		if d < StuckThreshold {
+			below++
+		} else {
+			above++
+		}
+	}
+	if below == 0 || above == 0 {
+		t.Errorf("measured against-wall diffs landed entirely on one side of StuckThreshold "+
+			"(below=%d above=%d); the premise for a separate wall signal no longer holds", below, above)
+	}
+}
+
+// After a turn the loop clears its forward history, so the verdict goes
+// back to unknown rather than reporting a wall that is no longer in
+// front of the player. Without that it sticks: "blocked" makes the model
+// turn instead of going forward, and only a forward press can clear it.
+func TestForwardBlockedIsUnknownAgainAfterHistoryIsCleared(t *testing.T) {
+	blocked, known := ForwardBlocked([]float64{0.00688, 0.01042, 0.01078, 0.00927})
+	if !blocked || !known {
+		t.Fatalf("precondition: want a known blocked verdict, got (%v, %v)", blocked, known)
+	}
+	if _, known := ForwardBlocked(nil); known {
+		t.Error("ForwardBlocked(nil) reported a known verdict; want unknown after a turn clears history")
 	}
 }
