@@ -166,6 +166,24 @@ echo "(override any time with --model=NAME, or \$KEV_MODEL before rerunning)"
 export KEV_MODEL="$kev_model"
 export KEV_BACKEND=ollama
 
+# Also record the choice in .env, which Compose reads automatically for
+# every `docker compose` run in this directory.
+#
+# Without it, only deploy.sh's own environment knows which model was
+# picked: docker-compose.yml falls back to ${KEV_MODEL:-llama3.2:1b}, so
+# a later bare `docker compose up -d` -- exactly what this README
+# suggests for restarting a service, and what anyone would reach for --
+# silently recreates kev pointing at a model that was never pulled. Kev
+# then 404s on every request and aiplay drops to its built-in fallback
+# policy, which looks like "the AI got dumber" rather than like a
+# misconfiguration, because by design nothing crashes.
+cat > .env <<ENV
+# Written by deploy.sh; Compose reads this automatically. Re-running
+# deploy.sh (or passing --model=NAME) rewrites it.
+KEV_MODEL=$kev_model
+KEV_BACKEND=ollama
+ENV
+
 compose_files=(-f docker-compose.yml)
 if [ "$gpu_ok" = true ]; then
   compose_files+=(-f docker-compose.gpu.yml)

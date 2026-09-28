@@ -112,6 +112,14 @@ $ docker compose up -d aiplay
 (`-connect-timeout`) on startup, so restarting it alone (without also
 restarting `zcxdoom`) is safe.
 
+These plain `docker compose` commands pick up the model `deploy.sh`
+chose because it records it in `.env` (gitignored, rewritten on every
+run), which Compose reads automatically. Without that file Compose would
+fall back to the `llama3.2:1b` default in `docker-compose.yml` and
+recreate `kev` pointing at a model nobody pulled -- which doesn't crash
+anything, it just makes `aiplay` fall back to its built-in policy and
+look inexplicably worse. Pass `--model=NAME` to `deploy.sh` to change it.
+
 ## Stopping
 
 ```console
