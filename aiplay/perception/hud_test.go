@@ -100,3 +100,40 @@ func TestExtractLeavesHUDNilWhenUnreadable(t *testing.T) {
 			s.Health, s.Ammo, s.Armor)
 	}
 }
+
+// The numbers here are measured, not invented: they come from sampling a
+// live game with the player standing still, and are recorded in the
+// comment on MotionThreshold. A blinking light sector changes more of the
+// picture than a monster does, so DiffScore alone cannot tell them apart
+// and every blink would be reported as something moving.
+func TestMotionSeenDistinguishesMovementFromLighting(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state State
+		want  bool
+	}{
+		{"perfectly static view", State{DiffScore: 0.0, BrightnessDelta: 0}, false},
+		{"animated wall panel", State{DiffScore: 0.00776, BrightnessDelta: 0}, false},
+		{"animated wall panel, larger", State{DiffScore: 0.00891, BrightnessDelta: 0}, false},
+		{"blinking light sector", State{DiffScore: 0.04104, BrightnessDelta: -0.0179}, false},
+		{"blink the other way", State{DiffScore: 0.04104, BrightnessDelta: 0.0179}, false},
+		{"something walking through view", State{DiffScore: 0.05182, BrightnessDelta: 0.0004}, true},
+		{"smaller movement", State{DiffScore: 0.02, BrightnessDelta: -0.0002}, true},
+	} {
+		if got := MotionSeen(tc.state); got != tc.want {
+			t.Errorf("%s: MotionSeen(diff=%.5f, dBright=%+.4f) = %v, want %v",
+				tc.name, tc.state.DiffScore, tc.state.BrightnessDelta, got, tc.want)
+		}
+	}
+}
+
+func TestExtractReportsBrightnessDelta(t *testing.T) {
+	dark := loadFrame(t, "hud_health26.png")
+	bright := loadFrame(t, "hud_health100.png")
+	if d := Extract(dark, bright, 0, "").BrightnessDelta; d == 0 {
+		t.Error("BrightnessDelta = 0 between two visibly different frames, want non-zero")
+	}
+	if d := Extract(bright, bright, 0, "").BrightnessDelta; d != 0 {
+		t.Errorf("BrightnessDelta between a frame and itself = %v, want 0", d)
+	}
+}

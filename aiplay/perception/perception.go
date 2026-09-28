@@ -46,6 +46,63 @@ type State struct {
 	Health *int `json:"health,omitempty"`
 	Ammo   *int `json:"ammo,omitempty"`
 	Armor  *int `json:"armor,omitempty"`
+
+	// True when something in view moved on its own -- see MotionSeen.
+	// nil until the first motion probe has completed, since "nothing is
+	// moving" and "we have not looked yet" are different claims.
+	MotionInView *bool `json:"something_moving_in_view,omitempty"`
+
+	// Change in overall brightness since the previous frame. Not sent to
+	// System 1; it exists to tell a moving object apart from a light
+	// changing, which look alike to DiffScore. See MotionSeen.
+	BrightnessDelta float64 `json:"-"`
+
+	// True when health dropped since the previous frame: something is
+	// hurting the player right now. Exact, since it comes from the HUD
+	// reading rather than from the picture.
+	TakingDamage bool `json:"taking_damage"`
+}
+
+// Thresholds for MotionSeen, measured against a live game with the
+// player standing still (see MotionSeen for why that matters):
+//
+//	perfectly static view      diff 0.00000   brightness delta  0.0000
+//	animated wall panel        diff 0.00776   brightness delta  0.0000
+//	              "            diff 0.00891   brightness delta  0.0000
+//	blinking light sector      diff 0.04104   brightness delta -0.0179
+//
+// E1M1 blinks its lights, and a blink changes far more of the picture
+// than a monster does -- so DiffScore alone calls every blink a monster.
+// What separates them is that a blink changes how bright the room is and
+// a monster walking across it does not, which is what BrightnessDelta is
+// for.
+const (
+	MotionThreshold      = 0.015 // above the animated panels, below a blink
+	LightChangeTolerance = 0.004 // a blink moves brightness four times this
+)
+
+// MotionSeen reports whether a state captured with the view held still
+// shows something moving in it.
+//
+// "With the view held still" is load-bearing: during ordinary play the
+// player's own walking and turning changes every pixel, so DiffScore
+// says nothing about monsters. aiplay therefore stops for a couple of
+// ticks on purpose before trusting this -- see doompolicy.IsProbeTick.
+//
+// This is what stands in for recognising a monster. Recognising one by
+// sight is not available: monsters share essentially the entire palette
+// with the level's own walls and floors, measured against this repo's
+// WAD, so no colour test can separate them. Moving is the one thing they
+// do that the architecture does not.
+func MotionSeen(s State) bool {
+	if s.DiffScore <= MotionThreshold {
+		return false
+	}
+	d := s.BrightnessDelta
+	if d < 0 {
+		d = -d
+	}
+	return d < LightChangeTolerance
 }
 
 // StuckThreshold is the DiffScore below which a frame counts as
@@ -75,6 +132,7 @@ func Extract(prev, curr image.Image, framesSinceMove int, tactic string) State {
 		s.DiffScore = 1 // no baseline yet
 	} else {
 		s.DiffScore = diffScore(prev, curr)
+		s.BrightnessDelta = s.MeanBrightness - meanBrightness(prev)
 	}
 
 	if s.DiffScore < StuckThreshold {

@@ -23,6 +23,12 @@ const (
 	TurnRight Action = "turn_right"
 	Fire      Action = "fire"
 	Use       Action = "use"
+
+	// Wait sends no key at all. It is never offered to System 1 as a
+	// choice -- letting the model decide to do nothing invites it to
+	// stall -- and exists only so aiplay can hold the view still for a
+	// motion probe. See ProbeInterval.
+	Wait Action = "wait"
 )
 
 // Keysym is the rfb.KeysymFor name Action should be sent as, matching
@@ -42,6 +48,8 @@ func (a Action) Keysym() string {
 		return "ctrl"
 	case Use:
 		return "space"
+	case Wait:
+		return "" // no key
 	default:
 		return "up"
 	}
@@ -80,6 +88,35 @@ const StuckReviveInterval = 3
 // StuckReviveAfter is how many unchanged frames count as wedged.
 const StuckReviveAfter = 9
 
+// Monsters are the one thing in a Doom frame that moves on its own, and
+// that is the only handle there is on them: they share essentially the
+// whole palette with the level's own walls and floors, so no colour or
+// sprite-colour test can separate the two. Measured against this repo's
+// own WAD -- across every light level, the set of palette entries used by
+// monsters but by no wall, flat, pickup or weapon sprite in E1M1 is
+// empty, and at full brightness it is a single entry.
+//
+// But "it moved" only means something while the player's own view is
+// still. During ordinary play every pixel moves, so aiplay stops for
+// ProbeStillTicks consecutive ticks every ProbeInterval, which makes the
+// frames either side of the last one directly comparable. Two ticks
+// rather than one so that both frames are equally still: the player's
+// weapon bobs while walking, and a frame captured mid-bob would register
+// as motion on its own.
+const (
+	ProbeInterval   = 12
+	ProbeStillTicks = 2
+)
+
+// IsProbeTick reports whether the action for this tick should be Wait to
+// hold the view still for a motion probe.
+func IsProbeTick(tick int) bool {
+	if tick <= 0 {
+		return false
+	}
+	return tick%ProbeInterval < ProbeStillTicks
+}
+
 // instructions tells System 1 what the state's fields mean and how they
 // bear on the decision.
 //
@@ -104,13 +141,13 @@ const StuckReviveAfter = 9
 // and the values are now real (see perception's HUD reader); they will
 // start earning their place once perception can also report an enemy
 // being visible.
-const instructions = "You are playing Doom, exploring a level. Your goal is to make progress through " +
-	"the level, so moving is the default; the state does not tell you whether an enemy is on screen, " +
-	"so do not assume one is. diff_score is how much the screen changed since the last frame and " +
-	"frames_since_move counts frames where nothing changed: when frames_since_move is above a few, " +
-	"you are stuck against a wall and should turn. health is 0-100 (0 means dead) and ammo is shots " +
-	"left; when health is low prefer retreating, and never fire with ammo 0. " +
-	"What should the player do next?"
+const instructions = "You are playing Doom, exploring a level. The state describes your situation. " +
+	"something_moving_in_view is true when something alive is moving in front of you, which in this " +
+	"game means a monster: that is when firing is worth it. taking_damage is true when a monster is " +
+	"hurting you right now. health is 0-100 and ammo is shots left; never fire with ammo 0, and when " +
+	"health is low prefer backing away. frames_since_move counts frames where nothing changed, so " +
+	"above a few you are stuck against a wall and should turn. When nothing is moving and you are not " +
+	"being hurt, keep exploring by moving forward. What should the player do next?"
 
 // criteria describes each option to System 1, per the "choice" question
 // type's contract (option name -> description).
@@ -152,16 +189,45 @@ func Decide(ctx context.Context, s1 *system1.Client, state perception.State, tic
 
 // reflex returns the action that has to happen on this tick regardless of
 // what System 1 or the fallback would choose, and whether there is one.
-// It is the one piece of policy that cannot be delegated: see
-// ReviveInterval for why pressing use has to be guaranteed rather than
-// merely likely.
+//
+// Order matters here, and it is priority order rather than convenience:
+// being dead outranks being stuck, and both outrank standing still to
+// look for movement. An earlier version ran the motion probe first, which
+// meant a probe tick could swallow the use press that a dead player was
+// waiting on.
 func reflex(state perception.State, tick int) (Action, bool) {
 	if tick <= 0 {
 		return "", false
 	}
-	if state.FramesSinceMove >= StuckReviveAfter {
-		return Use, tick%StuckReviveInterval == 0
+
+	// Dead. Now that health is read from the HUD this is exact, so press
+	// use every tick until it takes rather than waiting for a cadence.
+	if state.Health != nil && *state.Health == 0 {
+		return Use, true
 	}
+
+	// Wedged. Nothing on screen has changed for a while, which also
+	// means nothing is attacking, so getting unstuck is the only thing
+	// worth doing. Handled here rather than left to System 1 because it
+	// is mechanical recovery, and because the model does not do it:
+	// asked with frames_since_move well past this line, it still
+	// answered "forward", i.e. keep pressing into the wall. Alternate
+	// between use (in case it is a door) and a consistent turn, which
+	// sweeps the view around rather than dithering in place.
+	if state.FramesSinceMove >= StuckReviveAfter {
+		if tick%StuckReviveInterval == 0 {
+			return Use, true
+		}
+		return TurnRight, true
+	}
+
+	// Hold still to let the next frame comparison mean something.
+	if IsProbeTick(tick) {
+		return Wait, true
+	}
+
+	// Blind heartbeat, for when the HUD cannot be read and the death
+	// above therefore never fires.
 	return Use, tick%ReviveInterval == 0
 }
 

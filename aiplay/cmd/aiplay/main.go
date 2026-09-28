@@ -155,6 +155,13 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 	framesSinceMove := 0
 	n := 0
 
+	// Last two actions, so the loop can tell when the frame it is holding
+	// was taken with the view held still at both ends (see
+	// doompolicy.IsProbeTick), and lastHealth so a drop can be spotted.
+	var prevAction, prevPrevAction doompolicy.Action
+	var motionInView *bool
+	lastHealth := -1
+
 	for {
 		select {
 		case <-sigCh:
@@ -177,24 +184,49 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 			framesSinceMove = state.FramesSinceMove
 			prev = curr
 
+			// Both of the frames just compared were taken while the view
+			// was held still, so whatever changed between them moved by
+			// itself. Any other tick's DiffScore is dominated by the
+			// player's own movement and says nothing about monsters.
+			if prevAction == doompolicy.Wait && prevPrevAction == doompolicy.Wait {
+				moving := perception.MotionSeen(state)
+				motionInView = &moving
+			}
+			// Sticky: report the last probe's answer until the next one
+			// replaces it, rather than dropping the field on every
+			// ordinary tick.
+			state.MotionInView = motionInView
+
+			if state.Health != nil {
+				if lastHealth >= 0 && *state.Health < lastHealth {
+					state.TakingDamage = true
+				}
+				lastHealth = *state.Health
+			}
+
 			n++
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			action := doompolicy.Decide(ctx, s1, state, n)
 			cancel()
 
-			sym, err := rfb.KeysymFor(action.Keysym())
-			if err != nil {
-				log.Printf("system1: unknown keysym for action %s: %v", action, err)
-				continue
+			if action != doompolicy.Wait {
+				sym, err := rfb.KeysymFor(action.Keysym())
+				if err != nil {
+					log.Printf("system1: unknown keysym for action %s: %v", action, err)
+					continue
+				}
+				if err := conn.Tap(sym); err != nil {
+					log.Printf("system1: send key: %v", err)
+					continue
+				}
 			}
-			if err := conn.Tap(sym); err != nil {
-				log.Printf("system1: send key: %v", err)
-				continue
-			}
+			prevPrevAction, prevAction = prevAction, action
 
 			if n%20 == 0 {
-				log.Printf("tick %d: diff=%.3f brightness=%.2f stuck=%d -> %s", n, state.DiffScore, state.MeanBrightness, state.FramesSinceMove, action)
+				log.Printf("tick %d: diff=%.3f brightness=%.2f stuck=%d health=%s moving=%s hurt=%v -> %s",
+					n, state.DiffScore, state.MeanBrightness, state.FramesSinceMove,
+					intOrUnknown(state.Health), boolOrUnknown(state.MotionInView), state.TakingDamage, action)
 			}
 		}
 	}
@@ -228,4 +260,18 @@ func runSystem2(conn *rfb.Conn, d dialer, s2 *system2.Client, interval time.Dura
 		history = newTactic
 		log.Printf("system2: new tactic: %s", newTactic)
 	}
+}
+
+func intOrUnknown(v *int) string {
+	if v == nil {
+		return "?"
+	}
+	return fmt.Sprintf("%d", *v)
+}
+
+func boolOrUnknown(v *bool) string {
+	if v == nil {
+		return "?"
+	}
+	return fmt.Sprintf("%v", *v)
 }

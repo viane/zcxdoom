@@ -11,6 +11,11 @@ import (
 	"aiplay/system1"
 )
 
+// neutralTick is a tick on which no reflex fires, so a test can exercise
+// what Decide does with System 1's answer rather than with a use press or
+// a motion probe.
+const neutralTick = 5
+
 func isOneOf(a Action, options ...Action) bool {
 	for _, o := range options {
 		if a == o {
@@ -28,7 +33,7 @@ func TestDecideUsesSystem1AnswerWhenValid(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := Decide(context.Background(), system1.New(srv.URL), perception.State{}, 1)
+	a := Decide(context.Background(), system1.New(srv.URL), perception.State{}, neutralTick)
 	if a != Fire {
 		t.Errorf("Decide = %v, want Fire (what the mock server answered)", a)
 	}
@@ -36,7 +41,7 @@ func TestDecideUsesSystem1AnswerWhenValid(t *testing.T) {
 
 func TestDecideFallsBackOnSystem1Error(t *testing.T) {
 	s1 := system1.New("http://127.0.0.1:1") // unreachable
-	a := Decide(context.Background(), s1, perception.State{}, 1)
+	a := Decide(context.Background(), s1, perception.State{}, neutralTick)
 	if !isOneOf(a, Forward, Fire) {
 		t.Errorf("Decide with unreachable System1 = %v, want a fallback action (Forward or Fire for a non-stuck state)", a)
 	}
@@ -50,14 +55,14 @@ func TestDecideFallsBackOnInvalidChoice(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := Decide(context.Background(), system1.New(srv.URL), perception.State{}, 1)
+	a := Decide(context.Background(), system1.New(srv.URL), perception.State{}, neutralTick)
 	if !isOneOf(a, Forward, Fire) {
 		t.Errorf("Decide with an invalid choice = %v, want a fallback action", a)
 	}
 }
 
 func TestDecideNilClientUsesFallback(t *testing.T) {
-	a := Decide(context.Background(), nil, perception.State{}, 1)
+	a := Decide(context.Background(), nil, perception.State{}, neutralTick)
 	if !isOneOf(a, Forward, Fire) {
 		t.Errorf("Decide with nil System1 client = %v, want a fallback action", a)
 	}
@@ -139,5 +144,67 @@ func TestReflexRevivesFasterWhenScreenIsFrozen(t *testing.T) {
 func TestReflexStaysOutOfTheWayOnTickZero(t *testing.T) {
 	if _, ok := reflex(perception.State{}, 0); ok {
 		t.Error("reflex fired on tick 0; the first decision should be the policy's, not a use press")
+	}
+}
+
+func TestReflexHoldsStillOnProbeTicks(t *testing.T) {
+	// The motion probe needs two consecutive still frames; one would
+	// compare a frame taken mid weapon-bob against a still one.
+	still := 0
+	for tick := ProbeInterval; tick < ProbeInterval*2; tick++ {
+		if a, ok := reflex(perception.State{}, tick); ok && a == Wait {
+			still++
+		}
+	}
+	if still != ProbeStillTicks {
+		t.Errorf("still ticks per interval = %d, want %d", still, ProbeStillTicks)
+	}
+}
+
+func TestDeadPlayerGetsUseOnEveryTickIncludingProbeTicks(t *testing.T) {
+	// A dead player only responds to use, so nothing may outrank it --
+	// least of all standing still to look around, which a dead player
+	// cannot act on anyway.
+	dead := 0
+	health := 0
+	for tick := 1; tick <= ProbeInterval*2; tick++ {
+		a, ok := reflex(perception.State{Health: &health}, tick)
+		if ok && a == Use {
+			dead++
+		}
+	}
+	if dead != ProbeInterval*2 {
+		t.Errorf("use presses while dead = %d over %d ticks, want every tick", dead, ProbeInterval*2)
+	}
+}
+
+func TestLivingPlayerIsNotTreatedAsDead(t *testing.T) {
+	health := 100
+	if a, ok := reflex(perception.State{Health: &health}, ProbeInterval); !ok || a != Wait {
+		t.Errorf("reflex on a probe tick at full health = (%v, %v), want (wait, true)", a, ok)
+	}
+}
+
+func TestStuckPlayerAlwaysGetsAnEscapeAction(t *testing.T) {
+	// Being wedged has to resolve without System 1's help: asked with a
+	// high frames_since_move, the live model still answered "forward",
+	// which is what got the player wedged in the first place.
+	turns, uses := 0, 0
+	for tick := 1; tick <= 12; tick++ {
+		a, ok := reflex(perception.State{FramesSinceMove: StuckReviveAfter}, tick)
+		if !ok {
+			t.Fatalf("tick %d: no reflex while stuck, want one every tick", tick)
+		}
+		switch a {
+		case TurnRight:
+			turns++
+		case Use:
+			uses++
+		default:
+			t.Errorf("tick %d: reflex while stuck = %v, want a turn or use", tick, a)
+		}
+	}
+	if turns == 0 || uses == 0 {
+		t.Errorf("stuck recovery used turns=%d uses=%d, want both", turns, uses)
 	}
 }
