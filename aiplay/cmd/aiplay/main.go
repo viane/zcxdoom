@@ -40,6 +40,8 @@ func main() {
 	connectTimeout := flag.Duration("connect-timeout", 30*time.Second, "how long to keep retrying the initial VNC connection before giving up (the game container may still be starting)")
 	flag.Parse()
 
+	dial := dialer{addr: *addr, password: *password, timeout: *connectTimeout}
+
 	fastConn, err := connectWithRetry(*addr, *password, *connectTimeout)
 	if err != nil {
 		log.Fatalf("connect (system1): %v", err)
@@ -65,12 +67,12 @@ func main() {
 		defer slowConn.Close()
 		s2 := system2.New(*geminiKey, *system2Model)
 		log.Printf("System 2: Gemini model %s, every %s", s2.Model, *system2Interval)
-		go runSystem2(slowConn, s2, *system2Interval, &tacticMu, &tactic)
+		go runSystem2(slowConn, dial, s2, *system2Interval, &tacticMu, &tactic)
 	} else {
 		log.Print("System 2: no Gemini API key given (-system2-apikey or $GEMINI_API_KEY), disabled")
 	}
 
-	runSystem1(fastConn, s1, *system1Interval, &tacticMu, &tactic)
+	runSystem1(fastConn, dial, s1, *system1Interval, &tacticMu, &tactic)
 }
 
 // connectWithRetry keeps trying to connect until it succeeds or timeout
@@ -104,7 +106,44 @@ func connectWithRetry(addr, password string, timeout time.Duration) (*rfb.Conn, 
 	}
 }
 
-func runSystem1(conn *rfb.Conn, s1 *system1.Client, interval time.Duration, tacticMu *sync.RWMutex, tactic *string) {
+// dialer reopens a dropped VNC connection. Both loops hold their own
+// connection to the game (see this file's package doc), and each needs to
+// be able to rebuild it independently.
+type dialer struct {
+	addr     string
+	password string
+	timeout  time.Duration
+}
+
+// redial closes the dead connection and keeps trying to replace it,
+// returning only once it has one.
+//
+// Retrying the initial connection is not enough on its own: the game
+// container can legitimately restart underneath a running aiplay, and
+// every screenshot after that fails with "broken pipe" forever. The loop
+// kept going and kept logging, so the process stayed up and healthy
+// looking while the AI had in fact stopped playing entirely -- observed
+// after a `docker restart` of the game container.
+//
+// This retries indefinitely rather than giving up, matching how the rest
+// of aiplay handles a dependency being away: fall back or wait, but keep
+// running. connectWithRetry already paces its own attempts, so each pass
+// here blocks for up to timeout rather than spinning.
+func (d dialer) redial(label string, dead *rfb.Conn) *rfb.Conn {
+	if dead != nil {
+		dead.Close()
+	}
+	for {
+		conn, err := connectWithRetry(d.addr, d.password, d.timeout)
+		if err == nil {
+			log.Printf("%s: reconnected to %s", label, d.addr)
+			return conn
+		}
+		log.Printf("%s: reconnect failed, still trying: %v", label, err)
+	}
+}
+
+func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Duration, tacticMu *sync.RWMutex, tactic *string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	defer signal.Stop(sigCh)
@@ -125,6 +164,8 @@ func runSystem1(conn *rfb.Conn, s1 *system1.Client, interval time.Duration, tact
 			curr, err := conn.Screenshot()
 			if err != nil {
 				log.Printf("system1: screenshot: %v", err)
+				conn = d.redial("system1", conn)
+				prev = nil // the new connection's first frame has no baseline
 				continue
 			}
 
@@ -159,7 +200,7 @@ func runSystem1(conn *rfb.Conn, s1 *system1.Client, interval time.Duration, tact
 	}
 }
 
-func runSystem2(conn *rfb.Conn, s2 *system2.Client, interval time.Duration, tacticMu *sync.RWMutex, tactic *string) {
+func runSystem2(conn *rfb.Conn, d dialer, s2 *system2.Client, interval time.Duration, tacticMu *sync.RWMutex, tactic *string) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -170,6 +211,7 @@ func runSystem2(conn *rfb.Conn, s2 *system2.Client, interval time.Duration, tact
 		if err != nil {
 			log.Printf("system2: screenshot: %v", err)
 			cancel()
+			conn = d.redial("system2", conn)
 			continue
 		}
 
