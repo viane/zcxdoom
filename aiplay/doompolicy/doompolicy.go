@@ -80,6 +80,38 @@ const StuckReviveInterval = 3
 // StuckReviveAfter is how many unchanged frames count as wedged.
 const StuckReviveAfter = 9
 
+// instructions tells System 1 what the state's fields mean and how they
+// bear on the decision.
+//
+// Spelling that out is not decoration, and it is also not sufficient.
+// Both halves of that were measured against a live Kev on qwen3.5:9b:
+//
+//   - With only "what should the player do next?", every state returned
+//     "forward" -- health 100, health 12 and ammo 0 alike, with identical
+//     confidence. 17 of 17 live decisions were "forward".
+//   - Naming the fields and their consequences does move the answer:
+//     under combat-leaning wording, ammo 0 came back as "back" rather
+//     than a shot that could not have fired.
+//   - But the model then collapses onto whichever action the wording
+//     leans towards: that same combat wording produced 11 "fire" and no
+//     "forward" in live play, standing still and shooting nothing.
+//
+// The reason is that the state still cannot say whether an enemy is on
+// screen, so nothing in it distinguishes "shoot" from "explore" and the
+// model falls back on tone. This wording therefore leans the safer way --
+// keep exploring -- and is explicit that an enemy should not be assumed.
+// The health and ammo clauses are here because they are correct guidance
+// and the values are now real (see perception's HUD reader); they will
+// start earning their place once perception can also report an enemy
+// being visible.
+const instructions = "You are playing Doom, exploring a level. Your goal is to make progress through " +
+	"the level, so moving is the default; the state does not tell you whether an enemy is on screen, " +
+	"so do not assume one is. diff_score is how much the screen changed since the last frame and " +
+	"frames_since_move counts frames where nothing changed: when frames_since_move is above a few, " +
+	"you are stuck against a wall and should turn. health is 0-100 (0 means dead) and ammo is shots " +
+	"left; when health is low prefer retreating, and never fire with ammo 0. " +
+	"What should the player do next?"
+
 // criteria describes each option to System 1, per the "choice" question
 // type's contract (option name -> description).
 var criteria = map[string]string{
@@ -105,7 +137,7 @@ func Decide(ctx context.Context, s1 *system1.Client, state perception.State, tic
 		answers, err := s1.Ask(ctx, state, map[string]system1.Question{
 			questionID: {
 				Type:         "choice",
-				Instructions: "Given the current game state, what should the player do next?",
+				Instructions: instructions,
 				Criteria:     criteria,
 			},
 		})

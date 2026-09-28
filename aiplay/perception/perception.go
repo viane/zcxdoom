@@ -9,13 +9,22 @@
 // that needs to change if the game, its resolution, or its HUD layout ever
 // does.
 //
-// What's here is a deliberately modest first slice: frame-to-frame change
-// and overall brightness, both verified against real captured gameplay
-// frames. Richer facts (exact health/ammo via HUD digit reading,
-// enemy-visible) are a natural next step, but need calibration against the
-// game's actual rendered layout (Doom draws its HUD inside a scaled,
-// bordered 640x480 canvas, not at fixed pixel offsets) that hasn't been
-// done yet -- see tools/README.md before adding to State.
+// What's here: frame-to-frame change, overall brightness, and the three
+// status-bar numbers (health, ammo, armor) read off the rendered HUD --
+// all verified against real captured gameplay frames. See hud.go for the
+// HUD geometry and how it was calibrated.
+//
+// Reading the HUD matters more than it might look: without it the state
+// is three numbers that say nothing about the player's situation, and
+// System 1 answers "forward" to every one of them, because with no
+// health, no ammo and no enemies in the state there is nothing else the
+// state could justify. Measured before this existed: 17 of 17 decisions
+// were "forward".
+//
+// Still missing, and the natural next step: enemy-visible. That one does
+// need work this doesn't -- monsters are drawn at varying scale, eight
+// rotations and several animation frames, where the HUD font is fixed
+// and pixel-exact -- see tools/README.md.
 package perception
 
 import "image"
@@ -28,6 +37,15 @@ type State struct {
 	MeanBrightness  float64 `json:"mean_brightness"`   // 0..1
 	FramesSinceMove int     `json:"frames_since_move"` // consecutive ticks with DiffScore below StuckThreshold
 	Tactic          string  `json:"tactic,omitempty"`  // System 2's most recent high-level instruction, if any
+
+	// Read from the status bar; nil when the HUD could not be read from
+	// this frame. Pointers rather than plain ints so that an unreadable
+	// frame omits them from the state entirely: 0 is a real, meaningful
+	// health value (it means dead), so sending 0 for "don't know" would
+	// tell System 1 the exact opposite of the truth.
+	Health *int `json:"health,omitempty"`
+	Ammo   *int `json:"ammo,omitempty"`
+	Armor  *int `json:"armor,omitempty"`
 }
 
 // StuckThreshold is the DiffScore below which a frame counts as
@@ -63,6 +81,10 @@ func Extract(prev, curr image.Image, framesSinceMove int, tactic string) State {
 		s.FramesSinceMove = framesSinceMove + 1
 	} else {
 		s.FramesSinceMove = 0
+	}
+
+	if hud, ok := ReadHUD(curr); ok {
+		s.Health, s.Ammo, s.Armor = &hud.Health, &hud.Ammo, &hud.Armor
 	}
 	return s
 }
