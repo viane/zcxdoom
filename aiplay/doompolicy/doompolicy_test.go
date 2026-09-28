@@ -148,16 +148,16 @@ func TestReflexStaysOutOfTheWayOnTickZero(t *testing.T) {
 }
 
 func TestReflexHoldsStillOnProbeTicks(t *testing.T) {
-	// The motion probe needs two consecutive still frames; one would
-	// compare a frame taken mid weapon-bob against a still one.
+	// The probe takes its own pair of frames inside a single still tick,
+	// so it should cost exactly one tick per interval.
 	still := 0
 	for tick := ProbeInterval; tick < ProbeInterval*2; tick++ {
 		if a, ok := reflex(perception.State{}, tick); ok && a == Wait {
 			still++
 		}
 	}
-	if still != ProbeStillTicks {
-		t.Errorf("still ticks per interval = %d, want %d", still, ProbeStillTicks)
+	if still != 1 {
+		t.Errorf("still ticks per interval = %d, want exactly 1", still)
 	}
 }
 

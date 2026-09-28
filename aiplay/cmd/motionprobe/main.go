@@ -43,6 +43,7 @@ func main() {
 	n := flag.Int("n", 20, "")
 	gap := flag.Duration("gap", 300*time.Millisecond, "")
 	press := flag.String("press", "", "tap this key before each sample, to measure while driving (e.g. -press up to walk into a wall)")
+	settle := flag.Bool("settle", false, "tap -press once, then sample with no further input to see how long the view keeps drifting")
 	flag.Parse()
 
 	conn, err := rfb.Connect(*addr, *password)
@@ -50,6 +51,28 @@ func main() {
 		panic(err)
 	}
 	defer conn.Close()
+
+	if *settle {
+		sym, err := rfb.KeysymFor(*press)
+		if err != nil {
+			panic(err)
+		}
+		if err := conn.Tap(sym); err != nil {
+			panic(err)
+		}
+		prev, _ := conn.Screenshot()
+		for i := 0; i < *n; i++ {
+			time.Sleep(*gap)
+			cur, err := conn.Screenshot()
+			if err != nil {
+				panic(err)
+			}
+			st := perception.Extract(prev, cur, 0, "")
+			fmt.Println(fmt.Sprintf("settle +%4dms diff=%.5f", (i+1)*int(gap.Milliseconds()), st.DiffScore))
+			prev = cur
+		}
+		return
+	}
 
 	for i := 0; i < *n; i++ {
 		if *press != "" {

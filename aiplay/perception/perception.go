@@ -47,15 +47,14 @@ type State struct {
 	Ammo   *int `json:"ammo,omitempty"`
 	Armor  *int `json:"armor,omitempty"`
 
-	// True when something in view moved on its own -- see MotionSeen.
+	// True when something in view moved on its own -- see ProbeMotion.
 	// nil until the first motion probe has completed, since "nothing is
 	// moving" and "we have not looked yet" are different claims.
 	MotionInView *bool `json:"something_moving_in_view,omitempty"`
 
-	// Change in overall brightness since the previous frame. Not sent to
-	// System 1; it exists to tell a moving object apart from a light
-	// changing, which look alike to DiffScore. See MotionSeen.
-	BrightnessDelta float64 `json:"-"`
+	// Which way the movement was, when there was any: "left", "ahead" or
+	// "right". Turning toward it is what lets the player shoot back.
+	MotionDirection string `json:"moving_direction,omitempty"`
 
 	// True when health dropped since the previous frame: something is
 	// hurting the player right now. Exact, since it comes from the HUD
@@ -105,7 +104,7 @@ func ForwardBlocked(diffs []float64) (blocked, known bool) {
 }
 
 // Thresholds for MotionSeen, measured against a live game with the
-// player standing still (see MotionSeen for why that matters):
+// player standing still (see ProbeMotion for why that matters):
 //
 //	perfectly static view      diff 0.00000   brightness delta  0.0000
 //	animated wall panel        diff 0.00776   brightness delta  0.0000
@@ -115,35 +114,96 @@ func ForwardBlocked(diffs []float64) (blocked, known bool) {
 // E1M1 blinks its lights, and a blink changes far more of the picture
 // than a monster does -- so DiffScore alone calls every blink a monster.
 // What separates them is that a blink changes how bright the room is and
-// a monster walking across it does not, which is what BrightnessDelta is
-// for.
+// a monster walking across it does not, which is the second measurement
+// MotionSeen takes.
 const (
 	MotionThreshold      = 0.015 // above the animated panels, below a blink
 	LightChangeTolerance = 0.004 // a blink moves brightness four times this
 )
 
-// MotionSeen reports whether a state captured with the view held still
-// shows something moving in it.
+// Where in the view something moved. Doom's autoaim covers the vertical,
+// so left/right is all a player needs to bring a target into the line of
+// fire.
+const (
+	MotionAhead = "ahead"
+	MotionLeft  = "left"
+	MotionRight = "right"
+)
+
+// viewportBottom is the first row of the status bar: ST_Y (168) in game
+// coordinates, scaled. Below it is HUD, not world.
+const viewportBottom = 403 // int(168 * scaleY), rounded down
+
+// Motion is what a probe saw.
+type Motion struct {
+	Seen bool
+	// Where the movement was, one of MotionAhead/Left/Right. Only
+	// meaningful when Seen.
+	Direction string
+}
+
+// ProbeMotion compares two frames taken a moment apart with the player's
+// keys released, and reports whether anything moved and roughly where.
 //
-// "With the view held still" is load-bearing: during ordinary play the
-// player's own walking and turning changes every pixel, so DiffScore
-// says nothing about monsters. aiplay therefore stops for a couple of
-// ticks on purpose before trusting this -- see doompolicy.IsProbeTick.
-//
-// This is what stands in for recognising a monster. Recognising one by
-// sight is not available: monsters share essentially the entire palette
-// with the level's own walls and floors, measured against this repo's
-// WAD, so no colour test can separate them. Moving is the one thing they
-// do that the architecture does not.
-func MotionSeen(s State) bool {
-	if s.DiffScore <= MotionThreshold {
+// Direction is the point of it. "Something is moving" tells the player
+// there is a monster but not which way to face, and facing it is the
+// whole problem: Doom aims vertically by itself, so a player who knows
+// left from right can bring a target into the line of fire and one who
+// does not can only walk into it.
+func ProbeMotion(a, b image.Image) Motion {
+	bounds := b.Bounds()
+	third := bounds.Dx() / 3
+	var counts [3]int
+	total, n := 0, 0
+
+	for y := bounds.Min.Y; y < viewportBottom && y < bounds.Max.Y; y += sampleStride {
+		for x := bounds.Min.X; x < bounds.Max.X; x += sampleStride {
+			n++
+			pr, pg, pb, _ := a.At(x, y).RGBA()
+			cr, cg, cb, _ := b.At(x, y).RGBA()
+			if absDiff(pr, cr) > perChannelThreshold || absDiff(pg, cg) > perChannelThreshold || absDiff(pb, cb) > perChannelThreshold {
+				total++
+				switch i := (x - bounds.Min.X) / third; {
+				case i <= 0:
+					counts[0]++
+				case i == 1:
+					counts[1]++
+				default:
+					counts[2]++
+				}
+			}
+		}
+	}
+	if n == 0 {
+		return Motion{}
+	}
+
+	if !MotionSeen(float64(total)/float64(n), meanBrightness(b)-meanBrightness(a)) {
+		return Motion{}
+	}
+
+	dir := MotionAhead
+	switch {
+	case counts[0] > counts[1] && counts[0] > counts[2]:
+		dir = MotionLeft
+	case counts[2] > counts[1] && counts[2] > counts[0]:
+		dir = MotionRight
+	}
+	return Motion{Seen: true, Direction: dir}
+}
+
+// MotionSeen applies the thresholds above to one pair of measurements:
+// how much of the view changed, and how much its overall brightness did.
+// Kept separate from ProbeMotion so the numbers that decide this can be
+// tested directly against the ones that were measured.
+func MotionSeen(diffScore, brightnessDelta float64) bool {
+	if diffScore <= MotionThreshold {
 		return false
 	}
-	d := s.BrightnessDelta
-	if d < 0 {
-		d = -d
+	if brightnessDelta < 0 {
+		brightnessDelta = -brightnessDelta
 	}
-	return d < LightChangeTolerance
+	return brightnessDelta < LightChangeTolerance
 }
 
 // StuckThreshold is the DiffScore below which a frame counts as
@@ -173,7 +233,6 @@ func Extract(prev, curr image.Image, framesSinceMove int, tactic string) State {
 		s.DiffScore = 1 // no baseline yet
 	} else {
 		s.DiffScore = diffScore(prev, curr)
-		s.BrightnessDelta = s.MeanBrightness - meanBrightness(prev)
 	}
 
 	if s.DiffScore < StuckThreshold {

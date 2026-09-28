@@ -97,16 +97,16 @@ const StuckReviveAfter = 9
 // empty, and at full brightness it is a single entry.
 //
 // But "it moved" only means something while the player's own view is
-// still. During ordinary play every pixel moves, so aiplay stops for
-// ProbeStillTicks consecutive ticks every ProbeInterval, which makes the
-// frames either side of the last one directly comparable. Two ticks
-// rather than one so that both frames are equally still: the player's
-// weapon bobs while walking, and a frame captured mid-bob would register
-// as motion on its own.
-const (
-	ProbeInterval   = 12
-	ProbeStillTicks = 2
-)
+// still. During ordinary play every pixel moves, so aiplay stops on
+// every ProbeInterval-th tick and takes its own pair of frames a moment
+// apart, with the keys released -- see the probe in cmd/aiplay.
+//
+// One tick is enough because the view settles fast: measured on a live
+// game, it is already identical 100ms after the keys come up. An earlier
+// version spent two consecutive ticks on this and compared the ordinary
+// per-tick frames, which cost twice as much and left the answer up to
+// twelve ticks old by the time it was used.
+const ProbeInterval = 6
 
 // IsProbeTick reports whether the action for this tick should be Wait to
 // hold the view still for a motion probe.
@@ -114,7 +114,7 @@ func IsProbeTick(tick int) bool {
 	if tick <= 0 {
 		return false
 	}
-	return tick%ProbeInterval < ProbeStillTicks
+	return tick%ProbeInterval == 0
 }
 
 // instructions tells System 1 what the state's fields mean and how they
@@ -142,8 +142,9 @@ func IsProbeTick(tick int) bool {
 // start earning their place once perception can also report an enemy
 // being visible.
 const instructions = "You are playing Doom, exploring a level. The state describes your situation. " +
-	"something_moving_in_view is true when something alive is moving in front of you, which in this " +
-	"game means a monster: that is when firing is worth it. taking_damage is true when a monster is " +
+	"something_moving_in_view is true when something alive is moving nearby, which in this game means " +
+	"a monster. moving_direction says where it is: if it is left or right, turn that way to face it, " +
+	"and once it is ahead, fire. taking_damage is true when a monster is " +
 	"hurting you right now. health is 0-100 and ammo is shots left; never fire with ammo 0, and when " +
 	"health is low prefer backing away. frames_since_move counts frames where nothing changed, so " +
 	"above a few you are stuck against a wall and should turn. wall_directly_ahead is true when " +

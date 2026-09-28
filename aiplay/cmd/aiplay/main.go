@@ -155,12 +155,14 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 	framesSinceMove := 0
 	n := 0
 
-	// Last two actions, so the loop can tell when the frame it is holding
-	// was taken with the view held still at both ends (see
-	// doompolicy.IsProbeTick), and lastHealth so a drop can be spotted.
-	var prevAction, prevPrevAction doompolicy.Action
+	// The previous action, so forward progress can be attributed to the
+	// press that caused it, and lastHealth so a drop can be spotted.
+	var prevAction doompolicy.Action
 	var motionInView *bool
 	var forwardDiffs []float64
+	var keys heldKeys
+	var motion perception.Motion
+	motionAt := 0
 	lastHealth := -1
 
 	for {
@@ -173,6 +175,7 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 			if err != nil {
 				log.Printf("system1: screenshot: %v", err)
 				conn = d.redial("system1", conn)
+				keys.forget()
 				prev = nil // the new connection's first frame has no baseline
 				continue
 			}
@@ -189,14 +192,18 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 			// was held still, so whatever changed between them moved by
 			// itself. Any other tick's DiffScore is dominated by the
 			// player's own movement and says nothing about monsters.
-			if prevAction == doompolicy.Wait && prevPrevAction == doompolicy.Wait {
-				moving := perception.MotionSeen(state)
-				motionInView = &moving
+			// Report the last probe's answer, but only while it is still
+			// about roughly the present. Held indefinitely it goes stale
+			// and starts asserting a monster that has long since gone,
+			// or missing one that arrived after the last look.
+			if motionInView != nil && n-motionAt <= motionMaxAge {
+				state.MotionInView = motionInView
+				if motion.Seen {
+					state.MotionDirection = motion.Direction
+				}
+			} else {
+				motionInView, motion = nil, perception.Motion{}
 			}
-			// Sticky: report the last probe's answer until the next one
-			// replaces it, rather than dropping the field on every
-			// ordinary tick.
-			state.MotionInView = motionInView
 
 			// How far the last few forward presses actually got us. Kept
 			// here rather than in perception because only the loop knows
@@ -224,15 +231,23 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 			action := doompolicy.Decide(ctx, s1, state, n)
 			cancel()
 
-			if action != doompolicy.Wait {
-				sym, err := rfb.KeysymFor(action.Keysym())
-				if err != nil {
-					log.Printf("system1: unknown keysym for action %s: %v", action, err)
-					continue
-				}
-				if err := conn.Tap(sym); err != nil {
-					log.Printf("system1: send key: %v", err)
-					continue
+			if err := keys.apply(conn, action); err != nil {
+				log.Printf("system1: send key: %v", err)
+				conn = d.redial("system1", conn)
+				keys.forget()
+				prev = nil
+				continue
+			}
+
+			// A probe tick: the keys are up and the view has settled, so
+			// take a pair of frames of our own and see whether anything
+			// in them moved by itself.
+			if action == doompolicy.Wait {
+				if m, err := probeMotion(conn); err != nil {
+					log.Printf("system1: motion probe: %v", err)
+				} else {
+					seen := m.Seen
+					motion, motionInView, motionAt = m, &seen, n
 				}
 			}
 			// Turning or backing off changes what is in front of the
@@ -246,13 +261,14 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 				forwardDiffs = forwardDiffs[:0]
 			}
 
-			prevPrevAction, prevAction = prevAction, action
+			prevAction = action
 
 			if n%20 == 0 {
-				log.Printf("tick %d: diff=%.3f stuck=%d health=%s moving=%s hurt=%v wall=%s -> %s",
+				log.Printf("tick %d: diff=%.3f stuck=%d health=%s moving=%s%s hurt=%v wall=%s -> %s",
 					n, state.DiffScore, state.FramesSinceMove,
-					intOrUnknown(state.Health), boolOrUnknown(state.MotionInView),
+					intOrUnknown(state.Health), boolOrUnknown(state.MotionInView), dirSuffix(state.MotionDirection),
 					state.TakingDamage, boolOrUnknown(state.WallAhead), action)
+
 			}
 		}
 	}
@@ -300,4 +316,102 @@ func boolOrUnknown(v *bool) string {
 		return "?"
 	}
 	return fmt.Sprintf("%v", *v)
+}
+
+// motionMaxAge is how many ticks a motion reading stays worth reporting.
+// One probe interval plus a little slack: past that it is describing a
+// moment that has gone, and a stale "something is moving" is worse than
+// admitting we have not looked recently.
+const motionMaxAge = doompolicy.ProbeInterval + 1
+
+// Probe timings. settleDelay is how long to wait after releasing the
+// keys before looking: measured on a live game, the view is already
+// identical 100ms after they come up. probeGap is how far apart the two
+// frames are taken -- long enough for a monster to visibly move, short
+// enough to fit inside one tick.
+const (
+	settleDelay = 120 * time.Millisecond
+	probeGap    = 150 * time.Millisecond
+)
+
+// probeMotion takes two frames a moment apart with the keys up, so the
+// only thing that can differ between them is something that moved on its
+// own. Must be called with no keys held.
+func probeMotion(conn *rfb.Conn) (perception.Motion, error) {
+	time.Sleep(settleDelay)
+	a, err := conn.Screenshot()
+	if err != nil {
+		return perception.Motion{}, err
+	}
+	time.Sleep(probeGap)
+	b, err := conn.Screenshot()
+	if err != nil {
+		return perception.Motion{}, err
+	}
+	return perception.ProbeMotion(a, b), nil
+}
+
+// heldKeys keeps the current movement key down between decisions.
+//
+// Tapping a key for 80ms is about three of Doom's own tics, so a decision
+// every few hundred milliseconds moved the player a fraction of what
+// walking should cover, and the result looked less like bad judgement
+// than like wading through treacle. Holding the key until the decision
+// changes gives an ordinary walking pace, and matches how the game is
+// actually played.
+type heldKeys struct {
+	down uint32 // currently held keysym, 0 for none
+}
+
+// forget drops the record of what is held without sending anything, for
+// use after the connection was replaced and the server knows nothing
+// about the old key state.
+func (h *heldKeys) forget() { h.down = 0 }
+
+func (h *heldKeys) release(conn *rfb.Conn) error {
+	if h.down == 0 {
+		return nil
+	}
+	sym := h.down
+	h.down = 0
+	return conn.SendKey(sym, false)
+}
+
+func (h *heldKeys) apply(conn *rfb.Conn, action doompolicy.Action) error {
+	switch action {
+	case doompolicy.Wait:
+		return h.release(conn)
+
+	case doompolicy.Use:
+		// Doors and switches respond to the press, not to how long it is
+		// held, and holding it just re-triggers whatever is in front.
+		if err := h.release(conn); err != nil {
+			return err
+		}
+		sym, err := rfb.KeysymFor(action.Keysym())
+		if err != nil {
+			return err
+		}
+		return conn.Tap(sym)
+	}
+
+	sym, err := rfb.KeysymFor(action.Keysym())
+	if err != nil {
+		return err
+	}
+	if h.down == sym {
+		return nil // already held; leave it down
+	}
+	if err := h.release(conn); err != nil {
+		return err
+	}
+	h.down = sym
+	return conn.SendKey(sym, true)
+}
+
+func dirSuffix(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	return "(" + dir + ")"
 }

@@ -112,33 +112,22 @@ func TestExtractLeavesHUDNilWhenUnreadable(t *testing.T) {
 // and every blink would be reported as something moving.
 func TestMotionSeenDistinguishesMovementFromLighting(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		state State
-		want  bool
+		name             string
+		diff, brightness float64
+		want             bool
 	}{
-		{"perfectly static view", State{DiffScore: 0.0, BrightnessDelta: 0}, false},
-		{"animated wall panel", State{DiffScore: 0.00776, BrightnessDelta: 0}, false},
-		{"animated wall panel, larger", State{DiffScore: 0.00891, BrightnessDelta: 0}, false},
-		{"blinking light sector", State{DiffScore: 0.04104, BrightnessDelta: -0.0179}, false},
-		{"blink the other way", State{DiffScore: 0.04104, BrightnessDelta: 0.0179}, false},
-		{"something walking through view", State{DiffScore: 0.05182, BrightnessDelta: 0.0004}, true},
-		{"smaller movement", State{DiffScore: 0.02, BrightnessDelta: -0.0002}, true},
+		{"perfectly static view", 0.0, 0, false},
+		{"animated wall panel", 0.00776, 0, false},
+		{"animated wall panel, larger", 0.00891, 0, false},
+		{"blinking light sector", 0.04104, -0.0179, false},
+		{"blink the other way", 0.04104, 0.0179, false},
+		{"something walking through view", 0.05182, 0.0004, true},
+		{"smaller movement", 0.02, -0.0002, true},
 	} {
-		if got := MotionSeen(tc.state); got != tc.want {
-			t.Errorf("%s: MotionSeen(diff=%.5f, dBright=%+.4f) = %v, want %v",
-				tc.name, tc.state.DiffScore, tc.state.BrightnessDelta, got, tc.want)
+		if got := MotionSeen(tc.diff, tc.brightness); got != tc.want {
+			t.Errorf("%s: MotionSeen(%.5f, %+.4f) = %v, want %v",
+				tc.name, tc.diff, tc.brightness, got, tc.want)
 		}
-	}
-}
-
-func TestExtractReportsBrightnessDelta(t *testing.T) {
-	dark := loadFrame(t, "hud_health26.png")
-	bright := loadFrame(t, "hud_health100.png")
-	if d := Extract(dark, bright, 0, "").BrightnessDelta; d == 0 {
-		t.Error("BrightnessDelta = 0 between two visibly different frames, want non-zero")
-	}
-	if d := Extract(bright, bright, 0, "").BrightnessDelta; d != 0 {
-		t.Errorf("BrightnessDelta between a frame and itself = %v, want 0", d)
 	}
 }
 
@@ -218,5 +207,84 @@ func TestForwardBlockedIsUnknownAgainAfterHistoryIsCleared(t *testing.T) {
 	}
 	if _, known := ForwardBlocked(nil); known {
 		t.Error("ForwardBlocked(nil) reported a known verdict; want unknown after a turn clears history")
+	}
+}
+
+// synthFrames builds a pair of frames where a block of pixels moves
+// within one horizontal third of the view, standing in for a monster
+// crossing it.
+func synthFrames(blockX int, move int, tint uint8) (image.Image, image.Image) {
+	mk := func(x int) *image.RGBA {
+		img := image.NewRGBA(image.Rect(0, 0, 640, 480))
+		for y := 0; y < 480; y++ {
+			for px := 0; px < 640; px++ {
+				img.Set(px, y, color.RGBA{60 + tint, 60, 60, 255})
+			}
+		}
+		for y := 100; y < 260; y++ {
+			for px := x; px < x+90 && px < 640; px++ {
+				img.Set(px, y, color.RGBA{200, 180, 160, 255})
+			}
+		}
+		return img
+	}
+	return mk(blockX), mk(blockX + move)
+}
+
+func TestProbeMotionReportsWhichWayToTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		x    int
+		want string
+	}{
+		{"movement on the left", 20, MotionLeft},
+		{"movement straight ahead", 280, MotionAhead},
+		{"movement on the right", 520, MotionRight},
+	} {
+		a, b := synthFrames(tc.x, 30, 0)
+		m := ProbeMotion(a, b)
+		if !m.Seen {
+			t.Errorf("%s: Seen = false, want true", tc.name)
+			continue
+		}
+		if m.Direction != tc.want {
+			t.Errorf("%s: Direction = %q, want %q", tc.name, m.Direction, tc.want)
+		}
+	}
+}
+
+func TestProbeMotionIgnoresAStillView(t *testing.T) {
+	a, b := synthFrames(280, 0, 0)
+	if m := ProbeMotion(a, b); m.Seen {
+		t.Errorf("ProbeMotion on two identical frames = %+v, want Seen false", m)
+	}
+}
+
+// A blink changes the whole room's brightness. It must not read as a
+// monster, and it must not read as a direction either.
+func TestProbeMotionIgnoresALightChange(t *testing.T) {
+	a, b := synthFrames(280, 0, 40)
+	if m := ProbeMotion(a, b); m.Seen {
+		t.Errorf("ProbeMotion across a brightness change = %+v, want Seen false", m)
+	}
+}
+
+// The status bar is not the world: health and ammo digits change all the
+// time and none of it is a monster.
+func TestProbeMotionIgnoresTheStatusBar(t *testing.T) {
+	a := image.NewRGBA(image.Rect(0, 0, 640, 480))
+	b := image.NewRGBA(image.Rect(0, 0, 640, 480))
+	for y := 0; y < 480; y++ {
+		for x := 0; x < 640; x++ {
+			a.Set(x, y, color.RGBA{60, 60, 60, 255})
+			c := color.RGBA{60, 60, 60, 255}
+			if y >= viewportBottom {
+				c = color.RGBA{220, 40, 40, 255} // the bar, completely redrawn
+			}
+			b.Set(x, y, c)
+		}
+	}
+	if m := ProbeMotion(a, b); m.Seen {
+		t.Errorf("ProbeMotion with only the status bar changing = %+v, want Seen false", m)
 	}
 }
