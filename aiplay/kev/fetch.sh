@@ -19,10 +19,18 @@ KEV_REF="${KEV_REF:-959da16ee364722ba06daeac392df96c011c67b4}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 rm -rf src
-git init -q src
-git -C src remote add origin "$KEV_REPO"
-git -C src fetch --depth 1 origin "$KEV_REF"
-git -C src checkout -q FETCH_HEAD
+
+# src/ is a throwaway repo we create, fetch into, and strip the .git from
+# seconds later. On a filesystem that doesn't record ownership (a Windows
+# D: drive, a mounted share), git's dubious-ownership guard otherwise
+# refuses to operate on it at all. Passed per-command so this never
+# touches the user's global git config.
+git="git -c safe.directory=*"
+
+$git init -q src
+$git -C src remote add origin "$KEV_REPO"
+$git -C src fetch --depth 1 origin "$KEV_REF"
+$git -C src checkout -q FETCH_HEAD
 rm -rf src/.git
 
 echo "fetched arjun988/kev @ $KEV_REF into $(pwd)/src"

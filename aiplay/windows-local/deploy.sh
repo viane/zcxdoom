@@ -70,6 +70,28 @@ if [ "$total_ram_mb" -gt 0 ] && [ "$total_ram_mb" -lt 8192 ]; then
 fi
 
 echo
+echo "== Loading vendored base images =="
+# docker-compose.yml pins the zcxdoom build to these two vendored tags
+# (see ../../README.md#offline-from-this-repos-vendored-base-images), so
+# they have to exist in the local image store before `compose build` --
+# nothing pulls them, they aren't in any registry under these names.
+vendor_ubuntu="zcxdoom-vendor/ubuntu-20.04:amd64"
+vendor_golang="zcxdoom-vendor/golang-1.17-alpine:amd64"
+vendor_dir="../../vendor/images"
+if docker image inspect "$vendor_ubuntu" >/dev/null 2>&1; then
+  echo "$vendor_ubuntu already loaded."
+else
+  echo "Loading $vendor_ubuntu..."
+  docker load -i "$vendor_dir/ubuntu-20.04-amd64.tar.gz"
+fi
+if docker image inspect "$vendor_golang" >/dev/null 2>&1; then
+  echo "$vendor_golang already loaded."
+else
+  echo "Loading $vendor_golang (split into parts, concatenated)..."
+  cat "$vendor_dir"/golang-1.17-alpine-amd64.tar.gz.part-* | docker load
+fi
+
+echo
 echo "== Checking for GPU acceleration =="
 
 gpu_ok=false
@@ -79,11 +101,22 @@ if [ "$skip_gpu_check" = true ]; then
 elif ! command -v nvidia-smi >/dev/null 2>&1; then
   echo "No nvidia-smi found -- no NVIDIA GPU visible to this environment."
 else
+  # Prefer the already-loaded vendored base (no registry round-trip);
+  # fall back to pulling a small glibc image if it isn't loaded yet.
+  gpu_probe_image="$vendor_ubuntu"
+  if ! docker image inspect "$gpu_probe_image" >/dev/null 2>&1; then
+    gpu_probe_image="debian:bookworm-slim"
+  fi
   vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
   echo "GPU detected: ${vram_mb} MB VRAM."
   echo "Checking Docker can actually see it (this is the step that most often"
   echo "silently fails even when the GPU itself is fine)..."
-  if docker run --rm --gpus all alpine:3.20 sh -c 'command -v nvidia-smi && nvidia-smi -L' >/dev/null 2>&1; then
+  # Must be a glibc image: the NVIDIA runtime injects the host's
+  # dynamically-linked glibc nvidia-smi into the container, so on a musl
+  # image (alpine) the binary is present but cannot execute -- which made
+  # this check report "Docker can't see the GPU" on machines where it
+  # works fine, exactly the silent CPU fallback it exists to prevent.
+  if docker run --rm --gpus all "$gpu_probe_image" nvidia-smi -L >/dev/null 2>&1; then
     gpu_ok=true
     echo "Docker GPU passthrough works."
   else

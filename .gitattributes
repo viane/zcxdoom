@@ -1,0 +1,18 @@
+# Everything in this repo that is a text file is consumed inside a Linux
+# container (the Dockerfile's shell scripts, dockerdoom's autotools
+# configure, every Makefile), so it must be checked out with LF endings
+# regardless of the host's core.autocrlf setting.
+#
+# Without this, a clone on Windows with the common global
+# `core.autocrlf=true` rewrites dockerdoom/trunk/configure's shebang to
+# `#!/bin/sh\r`, and the build fails with the very unhelpful
+# `./configure: not found` (exit 127) -- the file is right there, but
+# Linux is looking for an interpreter literally named `/bin/sh\r`.
+* text=auto eol=lf
+
+# Binary assets: never touch these.
+*.wad binary
+*.png binary
+*.gz binary
+*.tar binary
+*.part-* binary
