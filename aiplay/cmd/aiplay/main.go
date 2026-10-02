@@ -334,6 +334,12 @@ const (
 	probeGap    = 150 * time.Millisecond
 )
 
+// turnPulse is how long a turn key is held. At Doom's ~123 degrees a
+// second this is roughly a 30 degree step: enough to bring something at
+// the edge of view into the middle in a couple of decisions, small
+// enough that a run of turns does not become a pirouette.
+const turnPulse = 250 * time.Millisecond
+
 // probeMotion takes two frames a moment apart with the keys up, so the
 // only thing that can differ between them is something that moved on its
 // own. Must be called with no keys held.
@@ -381,6 +387,28 @@ func (h *heldKeys) apply(conn *rfb.Conn, action doompolicy.Action) error {
 	switch action {
 	case doompolicy.Wait:
 		return h.release(conn)
+
+	case doompolicy.TurnLeft, doompolicy.TurnRight:
+		// Turning is pulsed rather than held. Doom turns at
+		// angleturn[0] = 640 per tic, shifted left 16, so a full circle
+		// takes 2^32 / (640<<16) = 102.4 tics -- about 2.9 seconds, or
+		// ~123 degrees a second. Held for a whole decision that is ~67
+		// degrees, and two or three turn decisions in a row spin the
+		// player through a full 360, which is what it looked like in
+		// play. A fixed pulse turns by a usable step instead and leaves
+		// the key up, so repeated turns step around rather than spin.
+		if err := h.release(conn); err != nil {
+			return err
+		}
+		sym, err := rfb.KeysymFor(action.Keysym())
+		if err != nil {
+			return err
+		}
+		if err := conn.SendKey(sym, true); err != nil {
+			return err
+		}
+		time.Sleep(turnPulse)
+		return conn.SendKey(sym, false)
 
 	case doompolicy.Use:
 		// Doors and switches respond to the press, not to how long it is

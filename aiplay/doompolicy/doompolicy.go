@@ -144,7 +144,10 @@ func IsProbeTick(tick int) bool {
 const instructions = "You are playing Doom, exploring a level. The state describes your situation. " +
 	"something_moving_in_view is true when something alive is moving nearby, which in this game means " +
 	"a monster. moving_direction says where it is: if it is left or right, turn that way to face it, " +
-	"and once it is ahead, fire. taking_damage is true when a monster is " +
+	"and once it is ahead, fire. If taking_damage is true but nothing is moving in view, whatever is " +
+	"hurting you is behind you or out of sight: turn to find it rather than shooting straight ahead " +
+	"at nothing. Do not fire when nothing is moving in view, because there is nothing in front to " +
+	"hit. taking_damage is true when a monster is " +
 	"hurting you right now. health is 0-100 and ammo is shots left; never fire with ammo 0, and when " +
 	"health is low prefer backing away. frames_since_move counts frames where nothing changed, so " +
 	"above a few you are stuck against a wall and should turn. wall_directly_ahead is true when " +

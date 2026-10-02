@@ -13,6 +13,20 @@ import (
 // x11vnc, DOOM -- connects to.
 const display = 99
 
+// Which level to start on, and how hard, overridable per deployment:
+//
+//	DOOM_EPISODE=1 DOOM_MAP=1 DOOM_SKILL=1
+//
+// Doom's own -warp takes the episode and map as two separate arguments
+// and reads only the first character of each (d_main.c: startepisode =
+// myargv[p+1][0]-'0'). This used to pass a single "-E1M1", so it read
+// '-' and computed episode -3, map -3; G_InitNew clamps both back up to
+// 1, which is why it still began on E1M1 and why nobody noticed. It
+// worked by accident, and meant the level could not actually be chosen.
+//
+// -skill is 1-based here (1 is "I'm too young to die", 5 is nightmare):
+// startskill = myargv[p+1][0]-'1'.
+
 func startCmd(cmdstring string) {
 	parts := strings.Split(cmdstring, " ")
 	cmd := exec.Command(parts[0], parts[1:]...)
@@ -70,6 +84,15 @@ func waitForDisplay(timeout time.Duration) error {
 	}
 }
 
+// envOr returns the environment variable v, or def when it is unset or
+// empty.
+func envOr(v, def string) string {
+	if got := os.Getenv(v); got != "" {
+		return got
+	}
+	return def
+}
+
 func main() {
 	log.Print("Create virtual display")
 	clearStaleXLocks()
@@ -82,7 +105,10 @@ func main() {
 	log.Print("You can now connect to it with a VNC viewer at port 5900")
 
 	log.Print("Starting DOOM ...")
-	doom := exec.Command("/usr/local/games/psdoom", "-warp", "-E1M1", "-skill", "1", "-nomouse", "-nopsmon")
+	doom := exec.Command("/usr/local/games/psdoom",
+		"-warp", envOr("DOOM_EPISODE", "1"), envOr("DOOM_MAP", "1"),
+		"-skill", envOr("DOOM_SKILL", "1"),
+		"-nomouse", "-nopsmon")
 	doom.Env = append(os.Environ(), fmt.Sprintf("DISPLAY=:%d", display))
 	doom.Stdout = os.Stdout
 	doom.Stderr = os.Stderr
