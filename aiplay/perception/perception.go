@@ -21,10 +21,12 @@
 // state could justify. Measured before this existed: 17 of 17 decisions
 // were "forward".
 //
-// Still missing, and the natural next step: enemy-visible. That one does
-// need work this doesn't -- monsters are drawn at varying scale, eight
-// rotations and several animation frames, where the HUD font is fixed
-// and pixel-exact -- see tools/README.md.
+// Since then: whether anything in view is moving on its own and which
+// side it is on (ProbeMotion), whether forward has stopped getting
+// anywhere (ForwardBlocked), and -- from a glance at the game's own
+// automap -- which way there is most room to go (ReadAutomap). That last
+// one is the only thing here that is not about what is directly in front
+// of the player, and so the only thing that can say where to head next.
 package perception
 
 import "image"
@@ -65,6 +67,13 @@ type State struct {
 	// anywhere -- see ForwardBlocked. nil until enough forward presses
 	// have been seen to judge.
 	WallAhead *bool `json:"wall_directly_ahead,omitempty"`
+
+	// Which way there is most room to go, read off the level map -- see
+	// ReadAutomap. Empty until the first glance at the map has
+	// succeeded. This is the only field that says anything about
+	// anywhere other than straight ahead, and so the only one that can
+	// answer "where next?" rather than "what now?".
+	OpenDirection string `json:"open_direction,omitempty"`
 }
 
 // ForwardProgress is how much of the view a step forward is expected to

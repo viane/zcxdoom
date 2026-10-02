@@ -70,3 +70,23 @@ func TestDescribeDoesNotInventFactsItDoesNotHave(t *testing.T) {
 		}
 	}
 }
+
+func TestDescribeSaysWhichWayThereIsRoomToGo(t *testing.T) {
+	for _, tc := range []struct {
+		dir  string
+		want string
+	}{
+		{DirAhead, "straight ahead"},
+		{DirLeft, "to the left"},
+		{DirRight, "to the right"},
+		{DirBehind, "back the way the player came"},
+	} {
+		got := Describe(State{OpenDirection: tc.dir})
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("Describe() with open_direction %q = %q, want it to mention %q", tc.dir, got, tc.want)
+		}
+	}
+	if got := Describe(State{}); strings.Contains(got, "level map") {
+		t.Errorf("Describe() mentioned the level map with no reading from it: %q", got)
+	}
+}

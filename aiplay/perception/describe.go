@@ -60,6 +60,16 @@ func Describe(s State) string {
 		parts = append(parts, fmt.Sprintf("Nothing on screen has changed for %d frames.", s.FramesSinceMove))
 	}
 
+	switch s.OpenDirection {
+	case "":
+	case DirAhead:
+		parts = append(parts, "The level map shows the most room to move straight ahead.")
+	case DirBehind:
+		parts = append(parts, "The level map shows the most room to move back the way the player came.")
+	default:
+		parts = append(parts, fmt.Sprintf("The level map shows the most room to move to the %s.", s.OpenDirection))
+	}
+
 	if s.Health != nil {
 		switch h := *s.Health; {
 		case h == 0:

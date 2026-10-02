@@ -105,8 +105,22 @@ func TestDecidePressesUseOnScheduleEvenWhenSystem1SaysOtherwise(t *testing.T) {
 	if a := Decide(context.Background(), system1.New(srv.URL), state, ReviveInterval); a != Use {
 		t.Errorf("Decide on the revive tick = %v, want Use even though System 1 answered forward", a)
 	}
-	if a := Decide(context.Background(), system1.New(srv.URL), state, ReviveInterval+1); a != Forward {
-		t.Errorf("Decide off the revive tick = %v, want System 1's answer (Forward)", a)
+	// And on a tick no reflex claims, System 1's answer stands. Found
+	// rather than hardcoded: reflexes run on several cadences now, and a
+	// fixed tick number quietly turns into a test of whichever one is
+	// added next.
+	plain := -1
+	for tick := ReviveInterval + 1; tick < 3*ReviveInterval; tick++ {
+		if _, ok := reflex(state, tick); !ok {
+			plain = tick
+			break
+		}
+	}
+	if plain < 0 {
+		t.Fatal("no tick without a reflex: the cadences now cover every tick")
+	}
+	if a := Decide(context.Background(), system1.New(srv.URL), state, plain); a != Forward {
+		t.Errorf("Decide on tick %d, which no reflex claims = %v, want System 1's answer (Forward)", plain, a)
 	}
 }
 
@@ -206,5 +220,73 @@ func TestStuckPlayerAlwaysGetsAnEscapeAction(t *testing.T) {
 	}
 	if turns == 0 || uses == 0 {
 		t.Errorf("stuck recovery used turns=%d uses=%d, want both", turns, uses)
+	}
+}
+
+// A door and a wall look identical from in front, so walking into
+// something is reason enough to try use on it -- but not reason to spend
+// every tick on it, or a player facing a real wall never turns away.
+func TestReflexTriesUseOnWhateverItWalkedInto(t *testing.T) {
+	blocked := true
+	state := perception.State{DiffScore: 0.09, WallAhead: &blocked}
+
+	used, ticks := 0, 0
+	for tick := 1; tick <= 4*WallUseInterval; tick++ {
+		a, ok := reflex(state, tick)
+		if !ok {
+			ticks++
+			continue
+		}
+		if a == Use {
+			used++
+		}
+		ticks++
+	}
+	if used == 0 {
+		t.Error("a player blocked by something never tried use on it")
+	}
+	if used == ticks {
+		t.Error("a blocked player tried use on every tick, so it would never turn away")
+	}
+
+	// And an unblocked player is not pushed into pressing use by this.
+	clear := false
+	open := perception.State{DiffScore: 0.09, WallAhead: &clear}
+	for tick := 1; tick <= WallUseInterval; tick++ {
+		if a, ok := reflex(open, tick); ok && a == Use && tick%ReviveInterval != 0 {
+			t.Errorf("tick %d: reflex pressed use with a clear way ahead", tick)
+		}
+	}
+}
+
+// Reading the map costs about a second with the view hidden, so it has to
+// stay on its own slow cadence and lose to anything more urgent.
+func TestGlanceIsScheduledButNeverBeatsDeathOrBeingStuck(t *testing.T) {
+	alive := perception.State{DiffScore: 0.09}
+	if a, ok := reflex(alive, GlanceInterval); !ok || a != Glance {
+		t.Errorf("reflex on a glance tick = %v (%v), want Glance", a, ok)
+	}
+
+	dead := 0
+	if a, ok := reflex(perception.State{Health: &dead}, GlanceInterval); !ok || a != Use {
+		t.Errorf("reflex on a glance tick while dead = %v (%v), want Use", a, ok)
+	}
+
+	stuck := perception.State{FramesSinceMove: StuckReviveAfter}
+	if a, _ := reflex(stuck, GlanceInterval); a == Glance {
+		t.Error("reflex went off to read the map while wedged against something")
+	}
+}
+
+// Glance and Wait are aiplay's own business: offering them to System 1
+// would let the model answer "do nothing" to being shot at.
+func TestSystem1IsNeverOfferedTheDoNothingActions(t *testing.T) {
+	for _, a := range []Action{Wait, Glance} {
+		if _, ok := criteria[string(a)]; ok {
+			t.Errorf("%s is offered to System 1 as a choice", a)
+		}
+		if isValidChoice(string(a)) {
+			t.Errorf("%s would be accepted as a System 1 answer", a)
+		}
 	}
 }

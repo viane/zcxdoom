@@ -164,6 +164,8 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 	var motion perception.Motion
 	motionAt := 0
 	lastHealth := -1
+	var automap perception.Automap
+	automapAt := 0
 
 	for {
 		select {
@@ -218,6 +220,15 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 				state.WallAhead = &blocked
 			}
 
+			// Same reasoning as the motion reading above: the map was
+			// read where the player was standing at the time, and once
+			// they have walked on it is describing somewhere else.
+			if automap.Known && n-automapAt <= automapMaxAge {
+				state.OpenDirection = automap.OpenDirection
+			} else {
+				automap = perception.Automap{}
+			}
+
 			if state.Health != nil {
 				if lastHealth >= 0 && *state.Health < lastHealth {
 					state.TakingDamage = true
@@ -250,6 +261,33 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 					motion, motionInView, motionAt = m, &seen, n
 				}
 			}
+
+			// A glance tick: put the automap up, read where there is
+			// room to go, and put it away again. This drives the
+			// keyboard itself, so it gets the tick to itself.
+			if action == doompolicy.Glance {
+				if m, err := glanceAutomap(conn); err != nil {
+					log.Printf("system1: automap glance: %v", err)
+				} else if m.Known {
+					log.Printf("system1: map: facing %.0f deg, most room %s (%.0f units)",
+						m.Facing, m.OpenDirection, m.OpenDistance)
+					if err := steerToward(conn, m.OpenDirection); err != nil {
+						log.Printf("system1: steer: %v", err)
+					} else if m.OpenDirection != perception.DirAhead {
+						// Now pointing that way, so that is what the
+						// state should say: reporting the direction as
+						// read would ask System 1 to turn again.
+						m.OpenDirection = perception.DirAhead
+					}
+					automap, automapAt = m, n
+				} else {
+					log.Print("system1: map: no reading")
+				}
+				// The glance walks the player a step in each direction,
+				// so what forward was achieving before it is no longer
+				// about where they are standing now.
+				forwardDiffs = forwardDiffs[:0]
+			}
 			// Turning or backing off changes what is in front of the
 			// player, so everything measured about the old direction is
 			// now about somewhere else. Without this the verdict sticks:
@@ -264,11 +302,10 @@ func runSystem1(conn *rfb.Conn, d dialer, s1 *system1.Client, interval time.Dura
 			prevAction = action
 
 			if n%20 == 0 {
-				log.Printf("tick %d: diff=%.3f stuck=%d health=%s moving=%s%s hurt=%v wall=%s -> %s",
+				log.Printf("tick %d: diff=%.3f stuck=%d health=%s moving=%s%s hurt=%v wall=%s open=%s -> %s",
 					n, state.DiffScore, state.FramesSinceMove,
 					intOrUnknown(state.Health), boolOrUnknown(state.MotionInView), dirSuffix(state.MotionDirection),
-					state.TakingDamage, boolOrUnknown(state.WallAhead), action)
-
+					state.TakingDamage, boolOrUnknown(state.WallAhead), orUnknown(state.OpenDirection), action)
 			}
 		}
 	}
@@ -318,6 +355,13 @@ func boolOrUnknown(v *bool) string {
 	return fmt.Sprintf("%v", *v)
 }
 
+func orUnknown(s string) string {
+	if s == "" {
+		return "?"
+	}
+	return s
+}
+
 // motionMaxAge is how many ticks a motion reading stays worth reporting.
 // One probe interval plus a little slack: past that it is describing a
 // moment that has gone, and a stale "something is moving" is worse than
@@ -339,6 +383,150 @@ const (
 // the edge of view into the middle in a couple of decisions, small
 // enough that a run of turns does not become a pirouette.
 const turnPulse = 250 * time.Millisecond
+
+// automapMaxAge is how many ticks a map reading stays worth reporting.
+// One glance interval plus slack, for the same reason as motionMaxAge:
+// the player keeps walking, and a direction that was open from where
+// they were standing a minute ago is not a fact about where they are now.
+const automapMaxAge = doompolicy.GlanceInterval + 2
+
+// glanceDelays. mapDrawDelay is how long to wait for the automap to
+// appear after the key; nudge is how long to hold a movement key to make
+// the map scroll far enough to measure.
+const (
+	mapDrawDelay = 250 * time.Millisecond
+	nudge        = 250 * time.Millisecond
+)
+
+// glanceAutomap puts Doom's own automap up, reads it, and puts it away.
+//
+// The nudge in the middle is not optional: the player arrow gives its
+// axis but not which end is the point, and the direction has to come from
+// which way the map scrolls when the player walks. See
+// perception.ReadAutomap.
+//
+// Two things here are defensive rather than decorative. The map is put up
+// by checking rather than by pressing once, because Doom clears
+// automapactive whenever it loads a level -- which is every respawn, and
+// a glance that trusted its own key press would spend the rest of the run
+// reading the 3D view. And a glance that finds the player wedged tries
+// again backwards, because pressing forward into a wall moves nobody and
+// a glance with no movement in it cannot resolve the facing at all --
+// which is exactly the moment the policy most wants an answer.
+//
+// Must be called with no keys held.
+func glanceAutomap(conn *rfb.Conn) (perception.Automap, error) {
+	a, err := showAutomap(conn)
+	if err != nil {
+		return perception.Automap{}, err
+	}
+	defer func() {
+		if sym, err := rfb.KeysymFor("tab"); err == nil {
+			conn.Tap(sym)
+		}
+	}()
+	if a == nil {
+		return perception.Automap{}, nil
+	}
+
+	b, err := nudgeAndShoot(conn, "up")
+	if err != nil {
+		return perception.Automap{}, err
+	}
+	if m := perception.ReadAutomap(a, b); m.Known {
+		return m, nil
+	}
+
+	// Wedged. Stepping back from b lands where a forward step would
+	// return to b, so the pair still reads the same way round.
+	c, err := nudgeAndShoot(conn, "down")
+	if err != nil {
+		return perception.Automap{}, err
+	}
+	return perception.ReadAutomap(c, b), nil
+}
+
+// showAutomap leaves the automap up and returns the first frame of it, or
+// nil if it would not come up.
+//
+// It tries several times because a freshly opened VNC connection drops
+// the first few key events it is sent: measured against the running game,
+// the first six taps after connecting did nothing at all and every tap
+// after that toggled the map exactly once.
+func showAutomap(conn *rfb.Conn) (image.Image, error) {
+	sym, err := rfb.KeysymFor("tab")
+	if err != nil {
+		return nil, err
+	}
+	for try := 0; try < 3; try++ {
+		if err := conn.Tap(sym); err != nil {
+			return nil, err
+		}
+		time.Sleep(mapDrawDelay)
+		img, err := conn.Screenshot()
+		if err != nil {
+			return nil, err
+		}
+		if perception.IsAutomap(img) {
+			return img, nil
+		}
+	}
+	return nil, nil
+}
+
+// quarterTurn is how long to hold a turn key to come round by about 90
+// degrees. Doom turns at angleturn[0] = 640 per tic shifted left 16, so a
+// full circle is 2^32 / (640<<16) = 102.4 tics: ~123 degrees a second.
+const quarterTurn = 730 * time.Millisecond
+
+// steerToward points the player at the direction the map says has the
+// most room, and is the reason reading the map changes anything.
+//
+// It is here rather than in the instructions because the model will not
+// do it. Asked with everything quiet and open_direction set to each of
+// the four in turn, a live Kev on qwen3.5:9b answered "forward" to all
+// four -- the same answer it gives when the room really is ahead. It does
+// use the rest of the state (a monster ahead got "fire", no ammo got
+// "back", something in the way got "turn_left"), so this is not a model
+// that ignores its input; it is one more field than it will weigh. The
+// field is worth having anyway, and this is the part of the loop that can
+// act on it: the glance already has the keyboard to itself.
+//
+// Turning by a quadrant rather than by the exact bearing is deliberate.
+// The direction is bucketed into quadrants to begin with, and the next
+// glance re-measures and corrects any overshoot.
+func steerToward(conn *rfb.Conn, dir string) error {
+	switch dir {
+	case perception.DirLeft:
+		return holdFor(conn, "left", quarterTurn)
+	case perception.DirRight:
+		return holdFor(conn, "right", quarterTurn)
+	case perception.DirBehind:
+		// Either way round works; right, to match the stuck reflex.
+		return holdFor(conn, "right", 2*quarterTurn)
+	}
+	return nil
+}
+
+func holdFor(conn *rfb.Conn, key string, d time.Duration) error {
+	sym, err := rfb.KeysymFor(key)
+	if err != nil {
+		return err
+	}
+	if err := conn.SendKey(sym, true); err != nil {
+		return err
+	}
+	time.Sleep(d)
+	return conn.SendKey(sym, false)
+}
+
+func nudgeAndShoot(conn *rfb.Conn, key string) (image.Image, error) {
+	if err := holdFor(conn, key, nudge); err != nil {
+		return nil, err
+	}
+	time.Sleep(settleDelay)
+	return conn.Screenshot()
+}
 
 // probeMotion takes two frames a moment apart with the keys up, so the
 // only thing that can differ between them is something that moved on its
@@ -385,7 +573,9 @@ func (h *heldKeys) release(conn *rfb.Conn) error {
 
 func (h *heldKeys) apply(conn *rfb.Conn, action doompolicy.Action) error {
 	switch action {
-	case doompolicy.Wait:
+	case doompolicy.Wait, doompolicy.Glance:
+		// Nothing to press: the probe and the glance both need the keys
+		// up, and the glance sends its own afterwards.
 		return h.release(conn)
 
 	case doompolicy.TurnLeft, doompolicy.TurnRight:

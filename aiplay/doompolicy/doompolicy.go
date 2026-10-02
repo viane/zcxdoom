@@ -29,6 +29,11 @@ const (
 	// stall -- and exists only so aiplay can hold the view still for a
 	// motion probe. See ProbeInterval.
 	Wait Action = "wait"
+
+	// Glance hands the tick over to aiplay's automap glance, which drives
+	// the keyboard itself for about a second. Like Wait it is never
+	// offered to System 1. See GlanceInterval.
+	Glance Action = "glance"
 )
 
 // Keysym is the rfb.KeysymFor name Action should be sent as, matching
@@ -48,7 +53,7 @@ func (a Action) Keysym() string {
 		return "ctrl"
 	case Use:
 		return "space"
-	case Wait:
+	case Wait, Glance:
 		return "" // no key
 	default:
 		return "up"
@@ -117,6 +122,41 @@ func IsProbeTick(tick int) bool {
 	return tick%ProbeInterval == 0
 }
 
+// GlanceInterval is how often the player checks the level map, counted in
+// decision ticks.
+//
+// Everything else perception reports is about what is directly in front
+// of the player, which is enough to fight with and not enough to get
+// anywhere: a run that has cleared the monsters out still wanders,
+// because nothing in the state says where it has not been yet. The map
+// does say that, and reading it is the one thing here that costs real
+// time -- about a second, with the 3D view hidden for all of it -- so it
+// happens on its own slow cadence rather than every tick.
+//
+// Prime, and deliberately not a multiple of ProbeInterval: the two would
+// otherwise land on the same tick regularly, and whichever lost would
+// never run.
+const GlanceInterval = 17
+
+// IsGlanceTick reports whether this tick should be spent reading the map.
+func IsGlanceTick(tick int) bool {
+	if tick <= 0 {
+		return false
+	}
+	return tick%GlanceInterval == 0
+}
+
+// WallUseInterval is how often a player who has walked into something
+// tries use on it, counted in decision ticks.
+//
+// Pressing use is what opens a door, and from in front there is nothing
+// to tell a door from a wall: both stop the player dead and both fill the
+// view with a flat texture. So walking into something is reason enough to
+// try the handle. Every third tick rather than every tick because most
+// walls really are walls, and the ticks in between are left to System 1,
+// which is told to turn away.
+const WallUseInterval = 3
+
 // instructions tells System 1 what the state's fields mean and how they
 // bear on the decision.
 //
@@ -133,15 +173,16 @@ func IsProbeTick(tick int) bool {
 //     leans towards: that same combat wording produced 11 "fire" and no
 //     "forward" in live play, standing still and shooting nothing.
 //
-// The reason is that the state still cannot say whether an enemy is on
-// screen, so nothing in it distinguishes "shoot" from "explore" and the
-// model falls back on tone. This wording therefore leans the safer way --
-// keep exploring -- and is explicit that an enemy should not be assumed.
-// The health and ammo clauses are here because they are correct guidance
-// and the values are now real (see perception's HUD reader); they will
-// start earning their place once perception can also report an enemy
-// being visible.
-const instructions = "You are playing Doom, exploring a level. The state describes your situation. " +
+// The reason was that the state could not then say whether an enemy was
+// on screen, so nothing in it distinguished "shoot" from "explore" and
+// the model fell back on tone. It can now -- see perception's motion
+// probe and HUD reader -- but the lesson stands, so this wording still
+// leans the safer way: it says what each field means and what follows
+// from it, and leaves the conclusion to the values rather than to the
+// prose.
+const instructions = "You are playing Doom. Your goal is to get out of this level and on to the next " +
+	"one, which means exploring it until you find the way out, so when nothing is threatening you, " +
+	"cover ground. " +
 	"something_moving_in_view is true when something alive is moving nearby, which in this game means " +
 	"a monster. moving_direction says where it is: if it is left or right, turn that way to face it, " +
 	"and once it is ahead, fire. If taking_damage is true but nothing is moving in view, whatever is " +
@@ -152,9 +193,12 @@ const instructions = "You are playing Doom, exploring a level. The state describ
 	"health is low prefer backing away. frames_since_move counts frames where nothing changed, so " +
 	"above a few you are stuck against a wall and should turn. wall_directly_ahead is true when " +
 	"pressing forward has stopped getting you anywhere because something is in the way: moving " +
-	"forward again will not help, so turn or back away instead. When ammo is missing entirely you " +
-	"are holding a melee weapon, which needs none. When nothing is moving and you are not being " +
-	"hurt, keep exploring by moving forward. What should the player do next?"
+	"forward again will not help. What is in the way may be a closed door, which use opens, so try " +
+	"use once and turn away if that does not help. use also presses the switches that open the way " +
+	"on. open_direction is where the level map shows the most room to move, and it is the best " +
+	"guess at where you have not been yet: when nothing is moving and you are not being hurt, head " +
+	"that way -- forward if it is ahead, otherwise turn that way first. When ammo is missing " +
+	"entirely you are holding a melee weapon, which needs none. What should the player do next?"
 
 // criteria describes each option to System 1, per the "choice" question
 // type's contract (option name -> description).
@@ -228,9 +272,21 @@ func reflex(state perception.State, tick int) (Action, bool) {
 		return TurnRight, true
 	}
 
+	// Walked into something. Try the handle before giving up on it.
+	if state.WallAhead != nil && *state.WallAhead && tick%WallUseInterval == 0 {
+		return Use, true
+	}
+
 	// Hold still to let the next frame comparison mean something.
 	if IsProbeTick(tick) {
 		return Wait, true
+	}
+
+	// Check the map. After the probe, because a monster in the room is
+	// more urgent than where to go next, and both are more urgent than
+	// the blind heartbeat below.
+	if IsGlanceTick(tick) {
+		return Glance, true
 	}
 
 	// Blind heartbeat, for when the HUD cannot be read and the death
@@ -263,9 +319,9 @@ func isValidChoice(choice string) bool {
 
 // fallback is a deliberately simple, dependency-free policy: move forward
 // most of the time, turn to break out of being stuck, and fire
-// periodically. It has no notion of enemies or health -- perception
-// doesn't extract that yet (see perception's package doc) -- so it's meant
-// to keep the game moving, not to play well.
+// periodically. It ignores everything the state knows about enemies,
+// health and where to go, because its job is to keep the game moving
+// while System 1 is unreachable, not to play well.
 func fallback(state perception.State) Action {
 	switch {
 	case state.FramesSinceMove >= 3:
