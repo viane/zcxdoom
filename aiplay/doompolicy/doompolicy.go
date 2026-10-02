@@ -175,7 +175,7 @@ func Decide(ctx context.Context, s1 *system1.Client, state perception.State, tic
 		return a
 	}
 	if s1 != nil {
-		answers, err := s1.Ask(ctx, state, map[string]system1.Question{
+		answers, err := s1.Ask(ctx, describeState(state), map[string]system1.Question{
 			questionID: {
 				Type:         "choice",
 				Instructions: instructions,
@@ -233,6 +233,24 @@ func reflex(state perception.State, tick int) (Action, bool) {
 	// Blind heartbeat, for when the HUD cannot be read and the death
 	// above therefore never fires.
 	return Use, tick%ReviveInterval == 0
+}
+
+// statePayload is what actually goes over the wire: the structured
+// fields, plus the same situation written out in English.
+//
+// Both, rather than one or the other, because System-1 servers do not
+// agree on what a state is. A server that prompts a language model gets
+// more out of the sentence than the blob -- bare numbers changed nothing
+// until the instructions explained them -- while a classifier reads a
+// passage and nothing else. Sending both keeps aiplay working against
+// either without a flag to get wrong.
+type statePayload struct {
+	perception.State
+	Situation string `json:"situation"`
+}
+
+func describeState(s perception.State) statePayload {
+	return statePayload{State: s, Situation: perception.Describe(s)}
 }
 
 func isValidChoice(choice string) bool {
